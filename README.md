@@ -22,6 +22,11 @@ forge validate <epic-path> --json   Print the full ValidationReport as JSON. Wri
 forge status <epic-path>            Summarize epic id, sprint ids, ticket counts, finding totals.
                                      Exit 0 normally; exit 1 only if the contract cannot load at all.
 
+forge run <epic-path> --dry-run     Execution preview (read-only): validate, then report the next ready
+                                     ticket, dependency reasoning, paths, verify commands, effective gate,
+                                     proposed branch, and the agent chain that WOULD run. Changes nothing.
+                                     Exit 0 if a ticket is ready, 1 if blocked. (--json for the raw report.)
+
 forge import --from-existing <legacy-sprint-path> --out <epic-root> --dry-run
                                      Plan an import: list canonical target files and flag ambiguity.
                                      Read-only; writes nothing.

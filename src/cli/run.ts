@@ -1,11 +1,18 @@
 import { planImport } from "../importer/plan.js";
 import { executeImport } from "../importer/write.js";
+import { runDryRun } from "../run/dry-run.js";
 import { buildReport, type ValidationReport } from "../validate/findings.js";
 import { validateIntegrity } from "../validate/integrity.js";
 import { loadContract } from "../validate/load.js";
 import { validateReadiness } from "../validate/readiness.js";
 import { validateContract } from "../validate/validate-contract.js";
-import { formatImportPlanHuman, formatImportResultHuman, formatReportHuman, formatStatusHuman } from "./format.js";
+import {
+  formatImportPlanHuman,
+  formatImportResultHuman,
+  formatReportHuman,
+  formatRunDryRunHuman,
+  formatStatusHuman,
+} from "./format.js";
 
 /** IO boundary so the runner is fully testable without touching stdout or disk. */
 export type CliIo = {
@@ -18,6 +25,7 @@ export type CliIo = {
 const USAGE =
   "usage: forge validate <epic-path> [--json]\n" +
   "       forge status <epic-path>\n" +
+  "       forge run <epic-path> --dry-run [--json]\n" +
   "       forge import --from-existing <legacy-sprint-path> --out <epic-root> [--dry-run] [--json]";
 
 export function runCli(argv: string[], io: CliIo): number {
@@ -38,6 +46,18 @@ export function runCli(argv: string[], io: CliIo): number {
 
   if (command === "import") {
     return runImport(argv.slice(1), io);
+  }
+
+  if (command === "run") {
+    if (!isUsablePath(epicPath)) return usageError(io);
+    const unknown = flags.filter((flag) => flag !== "--dry-run" && flag !== "--json");
+    if (unknown.length > 0) return usageError(io, `unknown option(s): ${unknown.join(", ")}`);
+    if (!flags.includes("--dry-run")) {
+      return usageError(io, "live run is not implemented yet; pass --dry-run");
+    }
+    const report = runDryRun(epicPath);
+    io.print(flags.includes("--json") ? JSON.stringify(report, null, 2) : formatRunDryRunHuman(report));
+    return report.ok ? 0 : 1;
   }
 
   return usageError(io);

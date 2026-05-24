@@ -1,5 +1,6 @@
 import type { ImportPlan } from "../importer/import-findings.js";
 import type { ImportResult } from "../importer/write.js";
+import type { RunDryRunReport } from "../run/dry-run.js";
 import type { ValidationFinding, ValidationReport } from "../validate/findings.js";
 import type { LoadedContract } from "../validate/load.js";
 
@@ -81,6 +82,33 @@ export function formatImportResultHuman(result: ImportResult): string {
         return `  [${finding.severity}] ${finding.code}  ${finding.message}${where}`;
       }),
     );
+  }
+  return lines.join("\n");
+}
+
+export function formatRunDryRunHuman(report: RunDryRunReport): string {
+  const lines = [`Forge run (dry-run): ${report.epicPath}`, `Result: ${report.ok ? "READY" : "BLOCKED"}`];
+
+  const selected = report.selected;
+  if (selected !== undefined) {
+    lines.push(
+      `Next ready ticket: ${selected.ticket} — ${selected.title}`,
+      `  sprint: ${selected.sprint}`,
+      `  kind=${selected.kind} risk=${selected.risk} change_class=${selected.change_class} blast_radius=${selected.blast_radius}`,
+      `  dependencies: ${report.dependencyReasoning.join("; ")}`,
+      `  allowed paths: ${report.allowedPaths.join(", ") || "(none)"}`,
+      `  forbidden paths: ${report.forbiddenPaths.join(", ") || "(none)"}`,
+      `  verify commands: ${report.verifyCommands.join(", ") || "(none)"}`,
+      `  gate: declared=${report.gate.declared} effective=${report.gate.effective} human-required=${report.gate.humanRequired} (${report.gate.reason})`,
+      `  branch: ${report.branch}`,
+      `  would dispatch: ${report.agents.join(" -> ")}`,
+      "  No files changed.",
+    );
+  }
+
+  if (report.blockedReasons.length > 0) {
+    lines.push(`Blocked (${report.blockedReasons.length}):`);
+    lines.push(...report.blockedReasons.map((reason) => `  - ${reason}`));
   }
   return lines.join("\n");
 }

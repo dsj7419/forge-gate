@@ -160,6 +160,36 @@ describe("runCli", () => {
   });
 });
 
+describe("runCli run (dry-run)", () => {
+  test("selects the next ready ticket and exits 0 for a valid contract", () => {
+    const { io, out } = fakeIo();
+    const code = runCli(["run", fx("valid-epic"), "--dry-run"], io);
+
+    expect(code).toBe(0);
+    expect(out.join("\n")).toContain("Next ready ticket: T01");
+    expect(out.join("\n")).toContain("No files changed.");
+  });
+
+  test("exits non-zero and reports BLOCKED for an invalid contract", () => {
+    const { io, out } = fakeIo();
+    const code = runCli(["run", fx("invalid-ticket"), "--dry-run"], io);
+
+    expect(code).toBe(1);
+    expect(out.join("\n")).toContain("BLOCKED");
+  });
+
+  test("refuses live run (no --dry-run) with exit 2", () => {
+    const { io, err } = fakeIo();
+    expect(runCli(["run", fx("valid-epic")], io)).toBe(2);
+    expect(err.join("\n")).toMatch(/dry-run/i);
+  });
+
+  test("rejects an unknown run flag with exit 2", () => {
+    const { io } = fakeIo();
+    expect(runCli(["run", fx("valid-epic"), "--dry-run", "--wat"], io)).toBe(2);
+  });
+});
+
 const legacyFixture = path.join(fixturesDir, "..", "..", "importer", "__fixtures__", "legacy-sprint-5");
 
 describe("runCli import (dry-run)", () => {
