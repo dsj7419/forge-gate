@@ -8,11 +8,17 @@ const DELIMITER = "---";
 
 /**
  * Splits a Markdown document's leading YAML front-matter from its body.
+ *
  * Returns a structured result rather than throwing, so the validator can turn
  * any parse problem into a finding instead of crashing.
+ *
+ * Permissive by design: empty front-matter yields `null` and a scalar root
+ * yields a string — both `ok: true`. Enforcing that ticket metadata is a
+ * proper object with required fields is the schema layer's job, not the
+ * parser's.
  */
 export function parseFrontMatter(raw: string): FrontMatter {
-  const lines = raw.split("\n");
+  const lines = raw.replace(/\r\n?/g, "\n").split("\n");
 
   if (lines[0]?.trimEnd() !== DELIMITER) {
     return { ok: false, error: "missing front-matter: document must begin with a '---' line" };
