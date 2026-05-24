@@ -95,14 +95,26 @@ Canonical wrapper sources live in `commands/`. Install them into `~/.claude/comm
 pnpm install-commands
 ```
 
-**Binary resolution** (in each wrapper): `forge` on `PATH` → `$FORGE_BIN` → (local-dev only)
-`pnpm -C "${FORGE_REPO:-<forge-repo>}" forge ...`. To put `forge` on `PATH`: `pnpm build` then
-`pnpm link --global`.
+**Binary resolution** (deterministic, in each wrapper, in order): `$FORGE_BIN` (overrides PATH, lets you
+pin a build) → `forge` on `PATH` → **local-dev-only** `pnpm -C "${FORGE_REPO:-<forge-repo>}" forge ...`.
+To put `forge` on `PATH`: `pnpm build` then `pnpm link --global`. The hardcoded `FORGE_REPO` default is
+local-dev only — set `FORGE_REPO` or link the CLI globally for real use.
 
-### Wrapper smoke checklist (manual)
+### Wrapper smoke checklist (manual, inside Claude Code)
 
-- `/forge-validate <fixture>` → shows `OK`/`FAILED` + findings.
-- `/forge-status <fixture>` → shows epic / sprint ids / ticket counts.
+Install once, then run the slash commands **inside Claude Code** (they are not shell commands; set
+`FORGE_REPO` in the environment if `forge` is not linked globally):
+
+```bash
+pnpm install-commands
+# then, inside Claude Code (with FORGE_REPO exported if forge is not on PATH):
+/forge-validate src/validate/__fixtures__/valid-epic
+/forge-run-dry-run src/validate/__fixtures__/valid-epic
+```
+
+Expected:
+- `/forge-validate <fixture>` → `OK`/`FAILED` + findings.
+- `/forge-status <fixture>` → epic / sprint ids / ticket counts.
 - `/forge-import --from-existing <legacy> --out <tmp> --dry-run` → planned target files + ambiguity findings; nothing written.
 - `/forge-run-dry-run <fixture>` → next ready ticket + "No files changed"; an invalid contract shows `BLOCKED`.
 - No wrapper edits source or contract files.

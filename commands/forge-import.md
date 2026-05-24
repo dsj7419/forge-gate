@@ -3,20 +3,30 @@ description: Import a legacy sprint folder into a Forge contract using the Forge
 argument-hint: --from-existing <legacy-sprint-path> --out <epic-root> [--dry-run]
 allowed-tools: Bash(forge:*), Bash(pnpm:*)
 ---
-Thin wrapper around the **Forge CLI** importer. The Forge core is the source of truth — this command
-adds no import logic and never invents missing metadata.
+Thin wrapper around the **Forge CLI** importer. Forge Core is the source of truth — this command adds
+no import logic and never invents missing metadata.
 
-Import arguments: `$ARGUMENTS`
+Run **exactly** the following with the Bash tool (after `$ARGUMENTS` is substituted), then relay the
+CLI output faithfully. Binary resolution: `$FORGE_BIN` overrides `PATH`; then `forge` on `PATH`; then a
+**local-dev-only** `pnpm` fallback.
 
-1. Run the Forge CLI: `forge import $ARGUMENTS`
-   - Binary resolution: `forge` on PATH; else `$FORGE_BIN`; else, **local dev only**,
-     `pnpm -C "${FORGE_REPO:-D:/Projects/forge}" forge import $ARGUMENTS`.
-2. Relay the outcome:
-   - **Dry-run** (`--dry-run`): list planned canonical target files and all ambiguity findings; nothing is written.
-   - **Live**: which canonical files were written, whether the generated contract is execution-ready, and the
-     location of `.forge/import-report.json`.
-3. If the importer refuses (e.g. non-empty output `IMPORT_OUTPUT_EXISTS`), say so plainly.
-4. If the generated contract is **not execution-ready**, state that it is a human-completion draft: ambiguous
-   fields were written as `TODO` (not invented) and must be completed before execution.
+```bash
+# FORGE_REPO is a LOCAL-DEV fallback only. For real use, set FORGE_BIN or `pnpm link --global` the CLI.
+if [ -n "$FORGE_BIN" ]; then
+  "$FORGE_BIN" import $ARGUMENTS
+elif command -v forge >/dev/null 2>&1; then
+  forge import $ARGUMENTS
+else
+  pnpm -C "${FORGE_REPO:-D:/Projects/forge}" forge import $ARGUMENTS
+fi
+```
+
+Then relay the outcome:
+- **Dry-run** (`--dry-run`): planned canonical target files + all ambiguity findings; nothing is written.
+- **Live**: which canonical files were written, whether the generated contract is execution-ready, and the
+  `.forge/import-report.json` location.
+- If the importer refuses (e.g. `IMPORT_OUTPUT_EXISTS`), say so plainly.
+- If the generated contract is **not execution-ready**, state it is a human-completion draft: ambiguous fields
+  were written as `TODO` (not invented) and need a human before execution.
 
 Do not edit the legacy source. Do not complete `TODO`s automatically — that requires a human decision.
