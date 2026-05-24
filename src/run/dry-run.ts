@@ -1,6 +1,16 @@
+import type { Gate } from "../schema/enums.js";
 import { escalationReason, isAdequatelyGated } from "../validate/escalation.js";
 import { validateContract } from "../validate/validate-contract.js";
 import { loadContract, type LoadedContract, type LoadedSprint, type LoadedTicket } from "../validate/load.js";
+
+/**
+ * Single source of truth for the gate → human-required rule: every effective gate
+ * needs a human review except `none`. The PM must report `human_gate_required` to
+ * match this; it is never inferred from the agent narrative.
+ */
+export function gateRequiresHuman(effectiveGate: Gate): boolean {
+  return effectiveGate !== "none";
+}
 
 const AGENT_CHAIN = ["engineer", "semantic-verifier", "scope-verifier", "pm"];
 
@@ -93,7 +103,7 @@ function effectiveGate(ticket: LoadedTicket): RunGateDecision {
       : ticket.frontMatter.gate_override
         ? "escalation overridden by gate_override"
         : `escalation already satisfied (${reason})`;
-  return { declared, effective: declared, humanRequired: declared !== "none", reason: note };
+  return { declared, effective: declared, humanRequired: gateRequiresHuman(declared), reason: note };
 }
 
 function slugifyTitle(title: string): string {

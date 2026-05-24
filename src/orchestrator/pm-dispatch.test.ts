@@ -121,6 +121,14 @@ describe("buildPmDispatch — deterministic PM input assembly", () => {
     expect(result.dispatch.prompt).toContain("Known harness limitations");
   });
 
+  test("prompt surfaces the authoritative, Core-derived human_gate_required from the effective gate", () => {
+    const result = build();
+    if (!result.ok) throw new Error("expected ok");
+    // sandbox-epic T01 is gate: pr -> human required. The PM must be told this, not left to guess.
+    expect(result.dispatch.prompt).toContain("Effective gate (authoritative");
+    expect(result.dispatch.prompt).toContain("human_gate_required: true");
+  });
+
   test("invalid engineer output fails (AGENT_OUTPUT_INVALID, source engineer)", () => {
     const result = build({ engineer: "summary: missing required fields\n" });
     expect(result.ok).toBe(false);

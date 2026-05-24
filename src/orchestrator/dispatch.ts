@@ -115,6 +115,7 @@ function renderContext(role: AgentRole, packets: RunPacketSet): string {
             i.semantic_verifier_output,
             i.scope_verifier_output,
             i.orchestrator_confirmed_facts,
+            packets.active_run.gate,
             p.known_harness_limitations,
           ),
         );
@@ -130,6 +131,7 @@ function renderPmInputs(
   semantic: SemanticVerifierOutput,
   scope: ScopeVerifierOutput,
   facts: OrchestratorConfirmedFacts,
+  gate: { declared: string; effective: string; human_required: boolean },
   knownHarnessLimitations: string[],
 ): string[] {
   const block = (value: unknown): string[] => ["```json", JSON.stringify(value, null, 2), "```"];
@@ -153,6 +155,9 @@ function renderPmInputs(
     "- final_changed_files:",
     ...facts.final_changed_files.map((f) => `  - ${f}`),
     `- final_branch_status: branch=${branch.branch}, ahead_of_base=${branch.ahead_of_base}, committed=${branch.committed}`,
+    "",
+    "## Effective gate (authoritative — Core-derived; set human_gate_required to match, never infer it)",
+    `- declared: ${gate.declared} | effective: ${gate.effective} | human_gate_required: ${gate.human_required}`,
     "",
     "## Known harness limitations",
     ...knownHarnessLimitations.map((l) => `- ${l}`),

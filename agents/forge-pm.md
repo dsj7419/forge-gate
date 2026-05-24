@@ -36,7 +36,7 @@ rationale: <why, referencing the verifier findings and evidence>
 instructions: [<precise, bounded fix>]   # present iff CORRECT
 decision_id: D-<nnn>
 journal_entry: <one-line append for JOURNAL.md>
-human_gate_required: true | false
+human_gate_required: true | false   # MUST equal the dispatch's "Effective gate (authoritative)" value — derived from the ticket gate, never inferred (gate: none → false; pr/merge/phase/manual → true)
 ```
 
 ## Anti-theater rules

@@ -4,10 +4,20 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
 import { makeContract, makeSprint, makeTicket } from "../validate/test-builders.js";
-import { planRun, runDryRun } from "./dry-run.js";
+import { gateRequiresHuman, planRun, runDryRun } from "./dry-run.js";
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "validate", "__fixtures__");
 const fx = (name: string): string => path.join(fixturesDir, name);
+
+describe("gateRequiresHuman (effective gate → human-required rule)", () => {
+  test('only "none" needs no human; merge/pr/phase/manual all require a human', () => {
+    expect(gateRequiresHuman("none")).toBe(false);
+    expect(gateRequiresHuman("merge")).toBe(true);
+    expect(gateRequiresHuman("pr")).toBe(true);
+    expect(gateRequiresHuman("phase")).toBe(true);
+    expect(gateRequiresHuman("manual")).toBe(true);
+  });
+});
 
 describe("planRun (ticket selection)", () => {
   test("selects the first pending ticket with no dependencies", () => {
