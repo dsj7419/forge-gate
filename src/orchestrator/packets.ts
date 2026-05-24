@@ -1,5 +1,7 @@
 import * as path from "node:path";
 
+import { z } from "zod";
+
 import type { EngineerOutput, ScopeVerifierOutput, SemanticVerifierOutput } from "../agents/schemas.js";
 import { loadContract } from "../validate/load.js";
 import { runDryRun } from "../run/dry-run.js";
@@ -71,12 +73,28 @@ export type SemanticVerifierPacket = PacketCommon & {
 };
 export type ScopeVerifierPacket = PacketCommon & { role: "scope-verifier"; output_schema: "scope-verifier" };
 
-export type OrchestratorConfirmedFacts = {
-  parse_validation: { engineer: boolean; semantic_verifier: boolean; scope_verifier: boolean };
-  verify_command_results: Array<{ cmd: string; result: "pass" | "fail" }>;
-  final_changed_files: string[];
-  final_branch_status: { branch: string; ahead_of_base: number; committed: boolean };
-};
+/**
+ * Ground-truth facts the orchestrator confirms itself (never trusting an agent's claim):
+ * which outputs passed validation, the real verify-command results, the actual changed
+ * files, and the branch/ahead state. Read from a JSON file at PM-dispatch time, so it is a
+ * trust boundary — validated with this schema before it can reach the PM prompt.
+ */
+export const OrchestratorConfirmedFactsSchema = z
+  .object({
+    parse_validation: z
+      .object({ engineer: z.boolean(), semantic_verifier: z.boolean(), scope_verifier: z.boolean() })
+      .strict(),
+    verify_command_results: z.array(
+      z.object({ cmd: z.string(), result: z.enum(["pass", "fail"]) }).strict(),
+    ),
+    final_changed_files: z.array(z.string()),
+    final_branch_status: z
+      .object({ branch: z.string(), ahead_of_base: z.number().int().nonnegative(), committed: z.boolean() })
+      .strict(),
+  })
+  .strict();
+
+export type OrchestratorConfirmedFacts = z.infer<typeof OrchestratorConfirmedFactsSchema>;
 
 export type PMPacket = PacketCommon & {
   role: "pm";

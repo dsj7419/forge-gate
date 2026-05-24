@@ -294,3 +294,95 @@ describe("runCli orchestration subcommands (read-only)", () => {
     expect(runCli(["parse-agent", "wizard", "--stdin"], io)).toBe(2);
   });
 });
+
+describe("runCli dispatch pm — deterministic input assembly", () => {
+  function pmInputDir(): { dir: string; engineer: string; semantic: string; scope: string; facts: string } {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-pm-"));
+    cliTempDirs.push(dir);
+    const engineer = path.join(dir, "engineer-output.yaml");
+    const semantic = path.join(dir, "semantic-output.yaml");
+    const scope = path.join(dir, "scope-output.yaml");
+    const facts = path.join(dir, "facts.json");
+    fs.writeFileSync(
+      engineer,
+      "ticket: T01\nsummary: add helper\nfiles_changed: [{ path: src/sandbox/add.ts, adds: 3, dels: 0 }]\ntests: { added: 2, changed: 0 }\ncommands_run: [{ cmd: pnpm test, result: pass }]\nwithin_allowed_paths: true\n",
+    );
+    fs.writeFileSync(
+      semantic,
+      'verdict: APPROVE\nacceptance_checked: [{ id: 1, status: met, evidence: "add.ts:1" }]\nfindings: []\nrisk_level: low\n',
+    );
+    fs.writeFileSync(
+      scope,
+      "verdict: APPROVE\nchanged_files: [src/sandbox/add.ts]\nallowed_path_status: clean\nforbidden_path_violations: []\nunexpected_files: []\nrecommendation: in scope\n",
+    );
+    fs.writeFileSync(
+      facts,
+      JSON.stringify({
+        parse_validation: { engineer: true, semantic_verifier: true, scope_verifier: true },
+        verify_command_results: [{ cmd: "pnpm test", result: "pass" }],
+        final_changed_files: ["src/sandbox/add.ts", "src/sandbox/add.test.ts"],
+        final_branch_status: { branch: "forge/sandbox-epic/T01-add", ahead_of_base: 0, committed: false },
+      }),
+    );
+    return { dir, engineer, semantic, scope, facts };
+  }
+
+  const pmArgs = (epic: string, f: { engineer: string; semantic: string; scope: string; facts: string }): string[] => [
+    "dispatch", "pm", epic,
+    "--engineer-output", f.engineer,
+    "--semantic-output", f.semantic,
+    "--scope-output", f.scope,
+    "--facts", f.facts,
+  ];
+
+  test("assembles the validated inputs into the PM prompt and writes nothing (exit 0)", () => {
+    const f = pmInputDir();
+    const { io, out, artifacts } = fakeIo();
+    const code = runCli(pmArgs(sandboxEpicPath, f), io);
+
+    expect(code).toBe(0);
+    const spec = JSON.parse(out.join("\n")) as { role: string; prompt: string };
+    expect(spec.role).toBe("pm");
+    expect(spec.prompt).toContain("allowed_path_status"); // validated scope structure
+    expect(spec.prompt).toContain("src/sandbox/add.test.ts"); // confirmed facts, not the scope output
+    expect(spec.prompt).toContain("pnpm test => pass"); // verify results
+    expect(artifacts).toHaveLength(0); // dispatch writes nothing
+  });
+
+  test("a missing facts file fails (non-zero)", () => {
+    const f = pmInputDir();
+    const { io } = fakeIo();
+    const code = runCli(pmArgs(sandboxEpicPath, { ...f, facts: path.join(f.dir, "nope.json") }), io);
+    expect(code).not.toBe(0);
+  });
+
+  test("an invalid engineer output fails (non-zero, ok:false)", () => {
+    const f = pmInputDir();
+    fs.writeFileSync(f.engineer, "summary: only a summary\n");
+    const { io, out } = fakeIo();
+    const code = runCli(pmArgs(sandboxEpicPath, f), io);
+    expect(code).toBe(1);
+    expect(JSON.parse(out.join("\n")).ok).toBe(false);
+  });
+
+  test("partial pm input flags are rejected with usage (exit 2)", () => {
+    const f = pmInputDir();
+    const { io } = fakeIo();
+    const code = runCli(["dispatch", "pm", sandboxEpicPath, "--engineer-output", f.engineer], io);
+    expect(code).toBe(2);
+  });
+
+  test("agent-output flags on a non-pm role are rejected (exit 2)", () => {
+    const f = pmInputDir();
+    const { io } = fakeIo();
+    const code = runCli(["dispatch", "engineer", sandboxEpicPath, "--engineer-output", f.engineer], io);
+    expect(code).toBe(2);
+  });
+
+  test("dispatch pm with no input flags still emits the skeleton (exit 0, no assembled inputs)", () => {
+    const { io, out } = fakeIo();
+    const code = runCli(["dispatch", "pm", sandboxEpicPath], io);
+    expect(code).toBe(0);
+    expect(out.join("\n")).not.toContain("## Inputs (each validated");
+  });
+});

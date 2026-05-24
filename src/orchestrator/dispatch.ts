@@ -2,8 +2,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { parseFrontMatter } from "../fs/front-matter.js";
-import type { AgentRole } from "../agents/parse-output.js";
-import type { PacketCommon, RunPacketSet } from "./packets.js";
+import { parseAgentOutput, type AgentRole } from "../agents/parse-output.js";
+import type { EngineerOutput, ScopeVerifierOutput, SemanticVerifierOutput } from "../agents/schemas.js";
+import {
+  OrchestratorConfirmedFactsSchema,
+  type OrchestratorConfirmedFacts,
+  type PacketCommon,
+  type RunPacketSet,
+} from "./packets.js";
 
 export type DispatchMode = "registered" | "injected-charter";
 
@@ -92,9 +98,65 @@ function renderContext(role: AgentRole, packets: RunPacketSet): string {
     }
     case "scope-verifier":
       return [...renderCommon(packets.scope_verifier), "", "## Task", roleTask(role, packets)].join("\n");
-    case "pm":
-      return [...renderCommon(packets.pm), "", "## Task", roleTask(role, packets)].join("\n");
+    case "pm": {
+      const p = packets.pm;
+      const i = p.inputs;
+      const lines = [...renderCommon(p)];
+      if (
+        i.engineer_output !== null &&
+        i.semantic_verifier_output !== null &&
+        i.scope_verifier_output !== null &&
+        i.orchestrator_confirmed_facts !== null
+      ) {
+        lines.push(
+          "",
+          ...renderPmInputs(
+            i.engineer_output,
+            i.semantic_verifier_output,
+            i.scope_verifier_output,
+            i.orchestrator_confirmed_facts,
+            p.known_harness_limitations,
+          ),
+        );
+      }
+      return [...lines, "", "## Task", roleTask(role, packets)].join("\n");
+    }
   }
+}
+
+/** Render the assembled, Core-validated PM inputs (the original structures, plus confirmed facts). */
+function renderPmInputs(
+  engineer: EngineerOutput,
+  semantic: SemanticVerifierOutput,
+  scope: ScopeVerifierOutput,
+  facts: OrchestratorConfirmedFacts,
+  knownHarnessLimitations: string[],
+): string[] {
+  const block = (value: unknown): string[] => ["```json", JSON.stringify(value, null, 2), "```"];
+  const { parse_validation: pv, final_branch_status: branch } = facts;
+  return [
+    "## Inputs (each validated by Forge Core via parse-agent — the original validated structures follow)",
+    "",
+    "### Engineer output (validated)",
+    ...block(engineer),
+    "",
+    "### Semantic-verifier output (validated)",
+    ...block(semantic),
+    "",
+    "### Scope-verifier output (validated)",
+    ...block(scope),
+    "",
+    "## Orchestrator-confirmed facts (ground truth, gathered in repo_root — never an agent's claim)",
+    `- parse_validation: engineer=${pv.engineer}, semantic_verifier=${pv.semantic_verifier}, scope_verifier=${pv.scope_verifier}`,
+    "- verify_command_results:",
+    ...facts.verify_command_results.map((r) => `  - ${r.cmd} => ${r.result}`),
+    "- final_changed_files:",
+    ...facts.final_changed_files.map((f) => `  - ${f}`),
+    `- final_branch_status: branch=${branch.branch}, ahead_of_base=${branch.ahead_of_base}, committed=${branch.committed}`,
+    "",
+    "## Known harness limitations",
+    ...knownHarnessLimitations.map((l) => `- ${l}`),
+  ];
 }
 
 /**
@@ -121,4 +183,68 @@ export function buildAgentDispatch(
     mode: "injected-charter",
     prompt: `You are acting as the following Forge agent (charter, obey strictly):\n\n${charter}\n\n${context}`,
   };
+}
+
+export type PmRawInputs = {
+  /** Raw engineer output (YAML, as the agent emitted it). */
+  engineer: string;
+  /** Raw semantic-verifier output (YAML). */
+  semantic: string;
+  /** Raw scope-verifier output (YAML). */
+  scope: string;
+  /** Raw orchestrator-confirmed facts (JSON). */
+  facts: string;
+};
+
+export type BuildPmDispatchResult =
+  | { ok: true; dispatch: AgentDispatch }
+  | { ok: false; code: "AGENT_OUTPUT_INVALID" | "FACTS_INVALID"; source: AgentRole | "facts"; errors: string[] };
+
+/**
+ * Deterministically assemble the PM dispatch from the upstream agent outputs and the
+ * orchestrator's confirmed facts — the one judgment-path step that was previously hand-built.
+ * Each agent output is re-validated with the existing agent-output validator and the facts
+ * with their schema; any invalid input is rejected (never summarized or repaired). On success
+ * the validated structures are embedded in the PM prompt verbatim. Pure: writes nothing and
+ * does not mutate the input packet skeleton.
+ */
+export function buildPmDispatch(
+  packets: RunPacketSet,
+  raw: PmRawInputs,
+  options: BuildAgentDispatchOptions,
+): BuildPmDispatchResult {
+  const engineer = parseAgentOutput("engineer", raw.engineer);
+  if (!engineer.ok) return { ok: false, code: "AGENT_OUTPUT_INVALID", source: "engineer", errors: engineer.errors };
+
+  const semantic = parseAgentOutput("semantic-verifier", raw.semantic);
+  if (!semantic.ok) return { ok: false, code: "AGENT_OUTPUT_INVALID", source: "semantic-verifier", errors: semantic.errors };
+
+  const scope = parseAgentOutput("scope-verifier", raw.scope);
+  if (!scope.ok) return { ok: false, code: "AGENT_OUTPUT_INVALID", source: "scope-verifier", errors: scope.errors };
+
+  let factsJson: unknown;
+  try {
+    factsJson = JSON.parse(raw.facts);
+  } catch (thrown) {
+    return { ok: false, code: "FACTS_INVALID", source: "facts", errors: [`malformed JSON: ${thrown instanceof Error ? thrown.message : String(thrown)}`] };
+  }
+  const facts = OrchestratorConfirmedFactsSchema.safeParse(factsJson);
+  if (!facts.success) {
+    const errors = facts.error.issues.map((issue) => `${issue.path.join(".")}${issue.path.length > 0 ? ": " : ""}${issue.message}`);
+    return { ok: false, code: "FACTS_INVALID", source: "facts", errors };
+  }
+
+  const filled: RunPacketSet = {
+    ...packets,
+    pm: {
+      ...packets.pm,
+      inputs: {
+        engineer_output: engineer.data,
+        semantic_verifier_output: semantic.data,
+        scope_verifier_output: scope.data,
+        orchestrator_confirmed_facts: facts.data,
+      },
+    },
+  };
+  return { ok: true, dispatch: buildAgentDispatch("pm", filled, options) };
 }

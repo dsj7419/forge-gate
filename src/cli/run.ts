@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { parseAgentOutput, type AgentRole } from "../agents/parse-output.js";
 import { planImport } from "../importer/plan.js";
 import { executeImport } from "../importer/write.js";
-import { buildAgentDispatch } from "../orchestrator/dispatch.js";
+import { buildAgentDispatch, buildPmDispatch, type PmRawInputs } from "../orchestrator/dispatch.js";
 import { generateRunPackets } from "../orchestrator/packets.js";
 import { runDryRun } from "../run/dry-run.js";
 import { buildReport, type ValidationReport } from "../validate/findings.js";
@@ -35,6 +35,7 @@ const USAGE =
   "       forge import --from-existing <legacy-sprint-path> --out <epic-root> [--dry-run] [--json]\n" +
   "       forge packets <epic-path>\n" +
   "       forge dispatch <engineer|semantic-verifier|scope-verifier|pm> <epic-path>\n" +
+  "       forge dispatch pm <epic-path> --engineer-output <f> --semantic-output <f> --scope-output <f> --facts <f.json>\n" +
   "       forge parse-agent <role> (--file <path> | --stdin)";
 
 export function runCli(argv: string[], io: CliIo): number {
@@ -74,15 +75,55 @@ export function runCli(argv: string[], io: CliIo): number {
     if (!isAgentRole(role) || dispatchEpic === undefined || dispatchEpic.startsWith("--")) {
       return usageError(io, "dispatch requires <role> <epic-path>");
     }
+    const rest = flags.slice(1);
+    const unknown = rest.filter((arg) => arg.startsWith("--") && !DISPATCH_FLAGS.has(arg));
+    if (unknown.length > 0) return usageError(io, `unknown option(s): ${unknown.join(", ")}`);
+
+    const pmInputs = {
+      engineer: flagValue(rest, "--engineer-output"),
+      semantic: flagValue(rest, "--semantic-output"),
+      scope: flagValue(rest, "--scope-output"),
+      facts: flagValue(rest, "--facts"),
+    };
+    const anyPmInput = Object.values(pmInputs).some((value) => value !== undefined);
+    if (anyPmInput && role !== "pm") {
+      return usageError(io, "agent-output inputs are only valid for `dispatch pm`");
+    }
+    if (anyPmInput && Object.values(pmInputs).some((value) => value === undefined)) {
+      return usageError(io, "dispatch pm input assembly requires --engineer-output, --semantic-output, --scope-output, and --facts");
+    }
+
     const result = generateRunPackets(dispatchEpic, process.cwd());
     if (!result.ok) {
       io.print(JSON.stringify({ ok: false, blockedReasons: result.blockedReasons }, null, 2));
       return 1;
     }
-    const dispatch = buildAgentDispatch(role, result.packets, {
-      registeredAvailable: false,
-      agentsDir: path.join(process.cwd(), "agents"),
-    });
+    const options = { registeredAvailable: false, agentsDir: path.join(process.cwd(), "agents") };
+
+    if (anyPmInput) {
+      let raw: PmRawInputs;
+      try {
+        raw = {
+          engineer: fs.readFileSync(pmInputs.engineer as string, "utf8"),
+          semantic: fs.readFileSync(pmInputs.semantic as string, "utf8"),
+          scope: fs.readFileSync(pmInputs.scope as string, "utf8"),
+          facts: fs.readFileSync(pmInputs.facts as string, "utf8"),
+        };
+      } catch (thrown) {
+        const error = thrown instanceof Error ? thrown.message : String(thrown);
+        io.print(JSON.stringify({ ok: false, code: "INPUT_FILE_UNREADABLE", error }, null, 2));
+        return 1;
+      }
+      const pm = buildPmDispatch(result.packets, raw, options);
+      if (!pm.ok) {
+        io.print(JSON.stringify(pm, null, 2));
+        return 1;
+      }
+      io.print(JSON.stringify(pm.dispatch, null, 2));
+      return 0;
+    }
+
+    const dispatch = buildAgentDispatch(role, result.packets, options);
     io.print(JSON.stringify(dispatch, null, 2));
     return 0;
   }
@@ -122,6 +163,7 @@ export function runCli(argv: string[], io: CliIo): number {
 }
 
 const IMPORT_FLAGS = new Set(["--from-existing", "--out", "--dry-run", "--json"]);
+const DISPATCH_FLAGS = new Set(["--engineer-output", "--semantic-output", "--scope-output", "--facts", "--json"]);
 
 function flagValue(args: string[], flag: string): string | undefined {
   const index = args.indexOf(flag);

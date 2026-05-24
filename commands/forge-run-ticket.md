@@ -29,18 +29,27 @@ Only writes allowed: a branch ref, the engineer's `allowed_paths` edits, and git
    `git -C "$REPO" rev-parse HEAD`.
 4. **Branch:** `git -C "$REPO" switch -c <branch>` (off the integration base, from the clean tree).
 5. **Engineer:** `$FORGE dispatch engineer "$EPIC"` → a dispatch spec `{subagent_type, prompt}`. Dispatch it
-   with the **Task** tool (use `subagent_type` and `prompt` exactly as given). Take the agent's raw output and
-   run `$FORGE parse-agent engineer --stdin` (pipe the raw YAML). If `ok:false` → ESCALATE (`AGENT_OUTPUT_INVALID`).
+   with the **Task** tool (use `subagent_type` and `prompt` exactly as given). Capture the agent's raw output to
+   `$REPO/<epic>/.forge/engineer-output.yaml` (the canonical capture path — it preserves evidence for
+   `run-report.json`), then run `$FORGE parse-agent engineer --file .forge/engineer-output.yaml`. If `ok:false`
+   → ESCALATE (`AGENT_OUTPUT_INVALID`).
 6. **Verify (independent):** run the ticket's `verify_commands` yourself in `$REPO` (do not trust the engineer's
    claim). Failure → go to CORRECT (step 9).
 7. **Scope check:** `git -C "$REPO" status --porcelain`; confirm every change is under `allowed_paths` and none
    touch `forbidden_paths`/protected. A violation → CORRECT/ESCALATE.
-8. **Verifiers:** dispatch `semantic-verifier` then `scope-verifier` (`$FORGE dispatch <role> "$EPIC"` → Task),
-   `parse-agent` each output (invalid → ESCALATE).
-9. **PM:** build the PM input from the validated engineer + verifier outputs + orchestrator-confirmed facts
-   (parse-validation booleans, verify results, changed files, `git rev-list --count <base>..HEAD`).
-   `$FORGE dispatch pm "$EPIC"` → Task (provide the validated inputs + confirmed facts in the prompt);
-   `parse-agent pm`. Decision:
+8. **Verifiers:** dispatch `semantic-verifier` then `scope-verifier` (`$FORGE dispatch <role> "$EPIC"` → Task).
+   Capture each raw output to `.forge/<role>-output.yaml` (`semantic-verifier-output.yaml`,
+   `scope-verifier-output.yaml`), then `$FORGE parse-agent <role> --file .forge/<role>-output.yaml` (invalid →
+   ESCALATE).
+9. **PM:** write the orchestrator-confirmed facts to `.forge/orchestrator-facts.json` — `{parse_validation:
+   {engineer,semantic_verifier,scope_verifier}, verify_command_results:[{cmd,result}], final_changed_files:[…],
+   final_branch_status:{branch, ahead_of_base:<git rev-list --count base..HEAD>, committed}}`. Then let Core
+   assemble + re-validate the PM input deterministically:
+   `$FORGE dispatch pm "$EPIC" --engineer-output .forge/engineer-output.yaml
+   --semantic-output .forge/semantic-verifier-output.yaml --scope-output .forge/scope-verifier-output.yaml
+   --facts .forge/orchestrator-facts.json`. If that returns `ok:false` (any input invalid) → ESCALATE; do **not**
+   hand-assemble the prompt. Dispatch the returned spec with **Task**, then capture + `parse-agent pm --file
+   .forge/pm-output.yaml`. Decision:
    - **CORRECT** → re-dispatch the engineer with the PM's bounded instructions (cycle ≤ 3; the 4th →
      `CORRECTION_CAP_REACHED` → ESCALATE), then re-run 6–9.
    - **ESCALATE** → step 11.
