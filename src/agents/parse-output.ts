@@ -44,6 +44,7 @@ export function parseAgentOutput(role: "engineer", raw: string): ParseResult<Eng
 export function parseAgentOutput(role: "semantic-verifier", raw: string): ParseResult<SemanticVerifierOutput>;
 export function parseAgentOutput(role: "scope-verifier", raw: string): ParseResult<ScopeVerifierOutput>;
 export function parseAgentOutput(role: "pm", raw: string): ParseResult<PMOutput>;
+export function parseAgentOutput(role: AgentRole, raw: string): ParseResult<unknown>;
 export function parseAgentOutput(role: AgentRole, raw: string): ParseResult<unknown> {
   let data: unknown;
   try {

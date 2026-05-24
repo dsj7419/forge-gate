@@ -226,3 +226,71 @@ describe("runCli import (dry-run)", () => {
     expect(code).toBe(2);
   });
 });
+
+const sandboxEpicPath = path.join(fixturesDir, "..", "..", "..", "sandbox-epic");
+const invalidTicketPath = path.join(fixturesDir, "invalid-ticket");
+
+describe("runCli orchestration subcommands (read-only)", () => {
+  test("packets <epic> emits the packet set as JSON with an absolute repo_root", () => {
+    const { io, out } = fakeIo();
+    const code = runCli(["packets", sandboxEpicPath], io);
+
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out.join("\n")) as { engineer: { repo_root: string }; pm: unknown };
+    expect(path.isAbsolute(parsed.engineer.repo_root)).toBe(true);
+    expect(parsed.pm).toBeDefined();
+  });
+
+  test("packets exits non-zero (JSON ok:false) for a blocked/invalid epic", () => {
+    const { io, out } = fakeIo();
+    const code = runCli(["packets", invalidTicketPath], io);
+    expect(code).toBe(1);
+    expect(JSON.parse(out.join("\n")).ok).toBe(false);
+  });
+
+  test("dispatch <role> <epic> emits a deterministic dispatch spec with pinned repo_root", () => {
+    const { io, out } = fakeIo();
+    const code = runCli(["dispatch", "engineer", sandboxEpicPath], io);
+
+    expect(code).toBe(0);
+    const spec = JSON.parse(out.join("\n")) as { subagent_type: string; mode: string; prompt: string };
+    expect(spec.subagent_type).toBe("general-purpose");
+    expect(spec.mode).toBe("injected-charter");
+    expect(spec.prompt).toContain("Evidence gathered outside repo_root is invalid evidence.");
+  });
+
+  test("dispatch rejects an unknown role (exit 2)", () => {
+    const { io } = fakeIo();
+    expect(runCli(["dispatch", "nope", sandboxEpicPath], io)).toBe(2);
+  });
+
+  test("parse-agent --file validates a good engineer output (exit 0, ok:true)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-parse-"));
+    cliTempDirs.push(dir);
+    const file = path.join(dir, "eng.yaml");
+    fs.writeFileSync(
+      file,
+      "ticket: T01\nsummary: x\nfiles_changed: [{ path: src/sandbox/add.ts, adds: 1, dels: 0 }]\ntests: { added: 1, changed: 0 }\ncommands_run: [{ cmd: pnpm test, result: pass }]\nwithin_allowed_paths: true\n",
+    );
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "engineer", "--file", file], io);
+    expect(code).toBe(0);
+    expect(JSON.parse(out.join("\n")).ok).toBe(true);
+  });
+
+  test("parse-agent --file rejects a malformed engineer output (exit 1, ok:false)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-parse-"));
+    cliTempDirs.push(dir);
+    const file = path.join(dir, "bad.yaml");
+    fs.writeFileSync(file, "summary: only a summary, missing required fields\n");
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "engineer", "--file", file], io);
+    expect(code).toBe(1);
+    expect(JSON.parse(out.join("\n")).ok).toBe(false);
+  });
+
+  test("parse-agent rejects an unknown role (exit 2)", () => {
+    const { io } = fakeIo();
+    expect(runCli(["parse-agent", "wizard", "--stdin"], io)).toBe(2);
+  });
+});

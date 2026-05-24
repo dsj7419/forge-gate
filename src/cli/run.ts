@@ -1,5 +1,11 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+
+import { parseAgentOutput, type AgentRole } from "../agents/parse-output.js";
 import { planImport } from "../importer/plan.js";
 import { executeImport } from "../importer/write.js";
+import { buildAgentDispatch } from "../orchestrator/dispatch.js";
+import { generateRunPackets } from "../orchestrator/packets.js";
 import { runDryRun } from "../run/dry-run.js";
 import { buildReport, type ValidationReport } from "../validate/findings.js";
 import { validateIntegrity } from "../validate/integrity.js";
@@ -26,7 +32,10 @@ const USAGE =
   "usage: forge validate <epic-path> [--json]\n" +
   "       forge status <epic-path>\n" +
   "       forge run <epic-path> --dry-run [--json]\n" +
-  "       forge import --from-existing <legacy-sprint-path> --out <epic-root> [--dry-run] [--json]";
+  "       forge import --from-existing <legacy-sprint-path> --out <epic-root> [--dry-run] [--json]\n" +
+  "       forge packets <epic-path>\n" +
+  "       forge dispatch <engineer|semantic-verifier|scope-verifier|pm> <epic-path>\n" +
+  "       forge parse-agent <role> (--file <path> | --stdin)";
 
 export function runCli(argv: string[], io: CliIo): number {
   const [command, epicPath, ...flags] = argv;
@@ -46,6 +55,55 @@ export function runCli(argv: string[], io: CliIo): number {
 
   if (command === "import") {
     return runImport(argv.slice(1), io);
+  }
+
+  if (command === "packets") {
+    if (!isUsablePath(epicPath)) return usageError(io);
+    const result = generateRunPackets(epicPath, process.cwd());
+    if (!result.ok) {
+      io.print(JSON.stringify({ ok: false, blockedReasons: result.blockedReasons }, null, 2));
+      return 1;
+    }
+    io.print(JSON.stringify(result.packets, null, 2));
+    return 0;
+  }
+
+  if (command === "dispatch") {
+    const role = epicPath; // argv[1]
+    const dispatchEpic = flags[0]; // argv[2]
+    if (!isAgentRole(role) || dispatchEpic === undefined || dispatchEpic.startsWith("--")) {
+      return usageError(io, "dispatch requires <role> <epic-path>");
+    }
+    const result = generateRunPackets(dispatchEpic, process.cwd());
+    if (!result.ok) {
+      io.print(JSON.stringify({ ok: false, blockedReasons: result.blockedReasons }, null, 2));
+      return 1;
+    }
+    const dispatch = buildAgentDispatch(role, result.packets, {
+      registeredAvailable: false,
+      agentsDir: path.join(process.cwd(), "agents"),
+    });
+    io.print(JSON.stringify(dispatch, null, 2));
+    return 0;
+  }
+
+  if (command === "parse-agent") {
+    const role = epicPath; // argv[1]
+    if (!isAgentRole(role)) return usageError(io, "parse-agent requires a valid <role>");
+    const fileIndex = flags.indexOf("--file");
+    let raw: string;
+    if (fileIndex !== -1) {
+      const file = flags[fileIndex + 1];
+      if (file === undefined) return usageError(io, "parse-agent --file requires a path");
+      raw = fs.readFileSync(file, "utf8");
+    } else if (flags.includes("--stdin")) {
+      raw = fs.readFileSync(0, "utf8");
+    } else {
+      return usageError(io, "parse-agent requires --file <path> or --stdin");
+    }
+    const result = parseAgentOutput(role, raw);
+    io.print(JSON.stringify(result, null, 2));
+    return result.ok ? 0 : 1;
   }
 
   if (command === "run") {
@@ -96,6 +154,10 @@ function runImport(args: string[], io: CliIo): number {
 
 function isUsablePath(epicPath: string | undefined): epicPath is string {
   return epicPath !== undefined && !epicPath.startsWith("--");
+}
+
+function isAgentRole(value: string | undefined): value is AgentRole {
+  return value === "engineer" || value === "semantic-verifier" || value === "scope-verifier" || value === "pm";
 }
 
 function usageError(io: CliIo, detail?: string): number {
