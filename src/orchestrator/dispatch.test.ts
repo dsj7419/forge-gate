@@ -39,6 +39,17 @@ describe("buildAgentDispatch — injected-charter fallback", () => {
     expect(d.prompt).toContain("Evidence gathered outside repo_root is invalid evidence.");
     expect(d.prompt).toContain("src/sandbox/**"); // allowed_paths
   });
+
+  test("the engineer prompt carries the ticket body/acceptance, not just the id and fences", () => {
+    const d = buildAgentDispatch("engineer", packets(), { registeredAvailable: false, agentsDir });
+    expect(d.prompt).toContain("## Acceptance Criteria");
+    expect(d.prompt).toContain("Create `src/sandbox/add.ts`"); // AI instructions from the ticket body
+  });
+
+  test("the semantic-verifier prompt carries the acceptance criteria text", () => {
+    const d = buildAgentDispatch("semantic-verifier", packets(), { registeredAvailable: false, agentsDir });
+    expect(d.prompt).toContain("exports a pure function");
+  });
 });
 
 describe("buildAgentDispatch — registered mode", () => {

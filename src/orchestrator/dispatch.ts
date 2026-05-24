@@ -29,17 +29,22 @@ export function loadCharterBody(agentsDir: string, role: AgentRole): string {
   return (parsed.ok ? parsed.body : text).trim();
 }
 
-function selectPacket(role: AgentRole, packets: RunPacketSet): PacketCommon {
-  switch (role) {
-    case "engineer":
-      return packets.engineer;
-    case "semantic-verifier":
-      return packets.semantic_verifier;
-    case "scope-verifier":
-      return packets.scope_verifier;
-    case "pm":
-      return packets.pm;
-  }
+function renderCommon(common: PacketCommon): string[] {
+  return [
+    "## Dispatch packet (pinned — obey exactly)",
+    `- repo_root: ${common.repo_root}`,
+    `- required_cwd: ${common.required_cwd}`,
+    "- cwd discipline:",
+    ...common.cwd_discipline.map((line) => `  - ${line}`),
+    `- epic_path: ${common.epic_path}`,
+    `- branch: ${common.branch}`,
+    `- ticket: ${common.ticket}`,
+    `- allowed_paths: ${JSON.stringify(common.allowed_paths)}`,
+    `- forbidden_paths: ${JSON.stringify(common.forbidden_paths)}`,
+    `- protected_paths: ${JSON.stringify(common.protected_paths)}`,
+    "",
+    "Run all tools from repo_root (cd there first; verify it is the git repo). Do not inspect other directories.",
+  ];
 }
 
 function roleTask(role: AgentRole, packets: RunPacketSet): string {
@@ -55,24 +60,41 @@ function roleTask(role: AgentRole, packets: RunPacketSet): string {
   }
 }
 
-function renderPacketContext(common: PacketCommon, task: string): string {
-  return [
-    "## Dispatch packet (pinned — obey exactly)",
-    `- repo_root: ${common.repo_root}`,
-    `- required_cwd: ${common.required_cwd}`,
-    "- cwd discipline:",
-    ...common.cwd_discipline.map((line) => `  - ${line}`),
-    `- branch: ${common.branch}`,
-    `- ticket: ${common.ticket}`,
-    `- allowed_paths: ${JSON.stringify(common.allowed_paths)}`,
-    `- forbidden_paths: ${JSON.stringify(common.forbidden_paths)}`,
-    `- protected_paths: ${JSON.stringify(common.protected_paths)}`,
-    "",
-    "Run all tools from repo_root (cd there first; verify it is the git repo). Do not inspect other directories.",
-    "",
-    `## Task`,
-    task,
-  ].join("\n");
+function renderContext(role: AgentRole, packets: RunPacketSet): string {
+  switch (role) {
+    case "engineer": {
+      const p = packets.engineer;
+      return [
+        ...renderCommon(p),
+        `- ticket_file: ${p.ticket_file}`,
+        `- verify_commands: ${JSON.stringify(p.verify_commands)}`,
+        "",
+        "## Ticket (front-matter + body)",
+        p.ticket_body,
+        "",
+        "## Task",
+        roleTask(role, packets),
+      ].join("\n");
+    }
+    case "semantic-verifier": {
+      const p = packets.semantic_verifier;
+      return [
+        ...renderCommon(p),
+        `- ticket_file: ${p.ticket_file}`,
+        `- verify_commands: ${JSON.stringify(p.verify_commands)}`,
+        "",
+        "## Acceptance Criteria (verify each against the repo)",
+        p.acceptance,
+        "",
+        "## Task",
+        roleTask(role, packets),
+      ].join("\n");
+    }
+    case "scope-verifier":
+      return [...renderCommon(packets.scope_verifier), "", "## Task", roleTask(role, packets)].join("\n");
+    case "pm":
+      return [...renderCommon(packets.pm), "", "## Task", roleTask(role, packets)].join("\n");
+  }
 }
 
 /**
@@ -86,7 +108,7 @@ export function buildAgentDispatch(
   packets: RunPacketSet,
   options: BuildAgentDispatchOptions,
 ): AgentDispatch {
-  const context = renderPacketContext(selectPacket(role, packets), roleTask(role, packets));
+  const context = renderContext(role, packets);
 
   if (options.registeredAvailable) {
     return { role, subagent_type: `forge-${role}`, mode: "registered", prompt: context };

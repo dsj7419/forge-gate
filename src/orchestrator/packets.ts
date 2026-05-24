@@ -1,6 +1,7 @@
 import * as path from "node:path";
 
 import type { EngineerOutput, ScopeVerifierOutput, SemanticVerifierOutput } from "../agents/schemas.js";
+import { loadContract } from "../validate/load.js";
 import { runDryRun } from "../run/dry-run.js";
 
 const CWD_DISCIPLINE = [
@@ -50,12 +51,24 @@ export type EngineerPacket = PacketCommon & {
   role: "engineer";
   ticket_title: string;
   ticket_kind: string;
+  /** Epic-relative path to the ticket file. */
+  ticket_file: string;
+  /** Full ticket prose body (Scope, Out of Scope, AI Instructions, Acceptance Criteria, …). */
+  ticket_body: string;
+  verify_commands: string[];
   governance_docs: string[];
   prior_corrections: string[];
   output_schema: "engineer";
 };
 
-export type SemanticVerifierPacket = PacketCommon & { role: "semantic-verifier"; output_schema: "semantic-verifier" };
+export type SemanticVerifierPacket = PacketCommon & {
+  role: "semantic-verifier";
+  ticket_file: string;
+  /** The ticket's Acceptance Criteria section text. */
+  acceptance: string;
+  verify_commands: string[];
+  output_schema: "semantic-verifier";
+};
 export type ScopeVerifierPacket = PacketCommon & { role: "scope-verifier"; output_schema: "scope-verifier" };
 
 export type OrchestratorConfirmedFacts = {
@@ -113,8 +126,16 @@ export function generateRunPackets(epicPath: string, repoRoot: string): Generate
     return { ok: false, blockedReasons: plan.blockedReasons.length > 0 ? plan.blockedReasons : ["no ready ticket selected"] };
   }
 
-  const root = path.resolve(repoRoot);
   const selected = plan.selected;
+  const loaded = loadContract(epicPath);
+  const sprint = loaded.contract?.sprints.find((entry) => entry.id === selected.sprint);
+  const ticket = sprint?.tickets.find((entry) => entry.frontMatter.id === selected.ticket);
+  if (ticket === undefined) {
+    return { ok: false, blockedReasons: [`selected ticket ${selected.ticket} could not be loaded for packet content`] };
+  }
+  const acceptance = extractSection(ticket.body, /^#{2,}\s+acceptance(\s+criteria)?\s*$/i);
+
+  const root = path.resolve(repoRoot);
   const common: PacketCommon = {
     repo_root: root,
     required_cwd: root,
@@ -145,11 +166,21 @@ export function generateRunPackets(epicPath: string, repoRoot: string): Generate
       role: "engineer",
       ticket_title: selected.title,
       ticket_kind: selected.kind,
+      ticket_file: ticket.file,
+      ticket_body: ticket.body,
+      verify_commands: ticket.frontMatter.verify_commands,
       governance_docs: [...GOVERNANCE_DOCS],
       prior_corrections: [],
       output_schema: "engineer",
     },
-    semantic_verifier: { ...common, role: "semantic-verifier", output_schema: "semantic-verifier" },
+    semantic_verifier: {
+      ...common,
+      role: "semantic-verifier",
+      ticket_file: ticket.file,
+      acceptance,
+      verify_commands: ticket.frontMatter.verify_commands,
+      output_schema: "semantic-verifier",
+    },
     scope_verifier: { ...common, role: "scope-verifier", output_schema: "scope-verifier" },
     pm: {
       ...common,
@@ -166,4 +197,20 @@ export function generateRunPackets(epicPath: string, repoRoot: string): Generate
   };
 
   return { ok: true, packets };
+}
+
+/** Extract a markdown section (heading + its content up to the next heading). */
+function extractSection(body: string, headingPattern: RegExp): string {
+  const lines = body.split(/\r\n?|\n/);
+  const start = lines.findIndex((line) => headingPattern.test(line.trim()));
+  if (start === -1) return "";
+  const section: string[] = [];
+  const heading = lines[start];
+  if (heading !== undefined) section.push(heading);
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    if (/^#{1,6}\s/.test(line.trim())) break;
+    section.push(line);
+  }
+  return section.join("\n").trim();
 }

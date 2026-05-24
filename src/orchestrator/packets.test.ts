@@ -55,6 +55,23 @@ describe("generateRunPackets", () => {
     expect(packets.pm.known_harness_limitations.length).toBeGreaterThan(0);
   });
 
+  test("the engineer packet carries the full ticket body, acceptance, AI instructions, verify commands, and file path", () => {
+    const p = packetsFor(sandboxEpic).engineer;
+    expect(p.ticket_body).toContain("## Scope");
+    expect(p.ticket_body).toContain("## Acceptance Criteria");
+    expect(p.ticket_body).toContain("exports a pure function"); // acceptance text
+    expect(p.ticket_body).toContain("Create `src/sandbox/add.ts`"); // AI instructions text
+    expect(p.verify_commands).toEqual(["pnpm test"]);
+    expect(p.ticket_file).toContain("tickets/T01");
+  });
+
+  test("the semantic-verifier packet carries acceptance criteria and verify commands", () => {
+    const p = packetsFor(sandboxEpic).semantic_verifier;
+    expect(p.acceptance).toContain("exports a pure function");
+    expect(p.verify_commands).toEqual(["pnpm test"]);
+    expect(p.ticket_file).toContain("tickets/T01");
+  });
+
   test("generation fails when forge run --dry-run is blocked (invalid contract)", () => {
     const result = generateRunPackets(invalidTicket, repoRoot);
     expect(result.ok).toBe(false);
