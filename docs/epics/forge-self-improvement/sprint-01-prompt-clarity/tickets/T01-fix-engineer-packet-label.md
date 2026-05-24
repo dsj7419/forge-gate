@@ -6,7 +6,7 @@ kind: green
 risk: low
 change_class: refactor
 blast_radius: local
-status: pending
+status: merged
 gate: pr
 gate_override: false
 allowed_paths: ["src/orchestrator/dispatch.ts", "src/orchestrator/dispatch.test.ts"]

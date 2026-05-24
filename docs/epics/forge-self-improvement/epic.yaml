@@ -3,6 +3,7 @@ id: forge-self-improvement
 title: Forge Self-Improvement (first real-code epic)
 sprints:
   - sprint-01-prompt-clarity
+  - sprint-02-release-readiness
 gate_policy:
   default_push: human
   default_merge: human

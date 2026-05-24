@@ -1,10 +1,10 @@
 schema_version: 1
-sprint: sprint-01-prompt-clarity
+sprint: sprint-02-release-readiness
 integration_base: main
 gate_policy:
   default_push: human
   default_merge: human
 tickets:
-  - id: T01
+  - id: T02
     kind: green
-    status: merged
+    status: pending
