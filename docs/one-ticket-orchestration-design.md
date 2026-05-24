@@ -15,6 +15,22 @@ to a cap, commit the result on an isolated branch, and **stop at the push gate**
 no hooks, no `--force`, no headless execution. Live execution is an **interactive Claude Code orchestration**
 — never headless `claude -p` — so it stays on the flat subscription and keeps a human at the gate.
 
+### v1 live-run constraints (Dan's release-gate decisions)
+
+1. **Ad-hoc / session-driven first** — the first live run is driven visibly from an interactive session so we can
+   watch dispatch and inspect intermediate outputs. It is wrapped as `/forge-run-ticket <epic-path>` only after
+   one or two successful runs.
+2. **Stop at a COMMIT gate, not after committing** — on PASS the orchestrator prepares commit materials (changed-file
+   summary, verification summary, PM decision, suggested commit message + exact `git` command) and **stops**. It
+   creates **no commit, no push, no PR, no merge.** A local commit is still durable repo state; the human inspects first.
+3. **Agent-output validator is a hard prerequisite** — built and green *before* any live run (see §8).
+4. **No contract/history writes in v1** — the engineer may edit **only** files inside the ticket's `allowed_paths`
+   (implementation/tests). The run must NOT write ticket front-matter, `manifest.yaml`, `JOURNAL.md`, `DECISIONS.md`,
+   or governance docs. Status write-back and journal appends come later, via tested write modules.
+5. **Any need to touch a contract/governance/journal/manifest file is an immediate ESCALATE**, never a silent write.
+6. On PASS, the orchestrator emits a **proposed** status transition (e.g. `T03 pending → ready_for_pr`) in its
+   report — but does not apply it.
+
 ## 2. Architecture: where the decision vs the dispatch lives
 
 - **Forge Core (CLI, deterministic, reusable):** validation, ticket selection, gate computation, branch-name
@@ -78,10 +94,10 @@ stateDiagram-v2
     Verifying --> PMReview: semantic + scope verdicts in
     PMReview --> Correcting: CORRECT (bounded instructions)
     Correcting --> Verifying: engineer re-applies (loop, max 3)
-    PMReview --> ReadyForPR: PASS + verify_commands green + scope clean
+    PMReview --> ReadyForCommit: PASS + verify_commands green + scope clean
     PMReview --> Escalated: ESCALATE | halt-trigger | correction cap reached
-    ReadyForPR --> PushGate: commit on branch
-    PushGate --> [*]: STOP — human approves push (no auto-push)
+    ReadyForCommit --> CommitGate: prepare commit materials (NO commit)
+    CommitGate --> [*]: STOP — human inspects working tree, then commits (no auto-commit/push/merge)
     Escalated --> [*]: STOP — recovery brief to human
 ```
 
@@ -98,21 +114,27 @@ Built by the orchestrator from the contract + git; each agent gets only what it 
 ## 8. Structured outputs (and a planned Core check)
 
 Agents emit the YAML schemas from their charters (engineer change-set; verifier verdict+findings; PM decision).
-**Planned Core capability (your hardening item):** Forge Core will *parse and validate* each agent's output against
-a schema (Zod), the same way it validates the contract. Invalid/unparseable agent output ⇒ `AGENT_OUTPUT_INVALID`
-⇒ escalate (never guessed past). For the first run we request the schema in-prompt; the Core validator is the
-immediate follow-up so the orchestrator never trusts free-form agent text.
+**Forge Core agent-output validator is a HARD PREREQUISITE — built and green before any live run** (not a
+follow-up). Core parses and validates each agent's output against a Zod schema, the same way it validates the
+contract. Malformed / missing-field / invalid-enum / unknown-field / prose-only ("looks good") output ⇒
+`AGENT_OUTPUT_INVALID` ⇒ escalate. The orchestrator **never** infers or repairs agent output; it acts only on
+validated structure. This is the **next implementation slice** (§13), before any dispatch.
 
 ## 9. Correction loop
 
 - Cap: **3** engineer↔verify↔PM cycles. On the 4th need → `CORRECTION_CAP_REACHED` ⇒ escalate with recovery brief.
 - Each CORRECT carries bounded, specific instructions; the engineer re-attempts within the same branch.
 
-## 10. Push-gate stop condition
+## 10. Commit-gate stop condition (v1)
 
-When the PM returns `PASS` and `verify_commands` are green and scope is clean, the orchestrator commits the work on
-the ticket branch, sets ticket `status` toward `ready_for_pr`, journals it, **and stops.** It does **not** push,
-open a PR, or merge. The human reviews the branch and decides. (Auto-push/PR/merge is a later increment.)
+When the PM returns `PASS`, `verify_commands` are green, and scope is clean, the orchestrator **prepares** a
+commit handoff and **stops** — it does not commit, push, PR, or merge:
+- changed-file summary, verification summary, PM decision, recovery brief;
+- a suggested commit message and the exact suggested `git` command;
+- a **proposed** status transition (e.g. `T03 pending → ready_for_pr`) — not applied.
+
+The human inspects the working tree and commits if satisfied. A later increment may upgrade this to
+"commit locally on the branch, then stop" once the loop is proven; auto-push/PR/merge remains out of scope.
 
 ## 11. Failure taxonomy (reuses the core error codes)
 
@@ -129,9 +151,22 @@ open a PR, or merge. The human reviews the branch and decides. (Auto-push/PR/mer
 | `ROLLBACK_REQUIRED` | rollback to checkpoint (with human OK) |
 | `UNKNOWN_ESCALATION` | escalate (fail safe) |
 
-## 12. Open questions for Dan
+## 12. Decisions (resolved by Dan)
 
-1. **Surface:** a `/forge-run-ticket <epic-path>` Claude command (orchestrator), or drive it ad-hoc from a session first?
-2. **Commit at push gate:** should the orchestrator *commit* on the branch before stopping (my assumption), or stop *before* committing and let the human commit?
-3. **Agent-output Core validator:** build it *before* the first live run (safer) or immediately *after* (faster to a demo)?
-4. **Status write-back:** on PASS, do we update the ticket front-matter `status` + manifest now, or only at merge time (later)?
+1. **Surface:** ad-hoc/session-driven first; wrap as `/forge-run-ticket` only after 1–2 successful runs.
+2. **Commit point:** stop at a COMMIT gate — prepare materials, create no commit (no push/PR/merge).
+3. **Agent-output validator:** build it BEFORE the first live run (hard prerequisite).
+4. **Status write-back:** deferred — no contract/manifest/journal/decisions/governance writes in v1; PM PASS emits a *proposed* transition only.
+
+## 13. Next implementation slice (build this, nothing else)
+
+**Agent-output schemas + parser/validator** — no agent dispatch yet.
+- `src/agents/schemas.ts` — Zod schemas for engineer, semantic-verifier, scope-verifier, and PM outputs (`.strict()`).
+- `src/agents/parse-output.ts` — parse YAML, validate against the named agent's schema, return a typed
+  success or a structured `AGENT_OUTPUT_INVALID` failure. Never infer or repair; reject prose-only output.
+- `src/agents/parse-output.test.ts` — valid passes; engineer missing `commands_run` fails; semantic verifier
+  missing evidence fails; semantic verifier prose-only "looks good" fails; scope verifier invalid `verdict`
+  fails; PM missing `decision`/`rationale` fails; PM invalid `decision` enum fails; malformed YAML fails;
+  unknown top-level field fails.
+
+Only after this is green do we design/build the ad-hoc first live one-ticket run.
