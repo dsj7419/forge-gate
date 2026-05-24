@@ -119,6 +119,23 @@ Expected:
 - `/forge-run-dry-run <fixture>` → next ready ticket + "No files changed"; an invalid contract shows `BLOCKED`.
 - No wrapper edits source or contract files.
 
+## Agent charters (definitions only — no live dispatch yet)
+
+The four Forge subagent roles are defined as Claude Code subagent charters in `agents/` (installed to
+`~/.claude/agents/` by `pnpm install-commands`). They are **declarations of the human/agent contract** — nothing
+dispatches them until the orchestrator is built.
+
+| Charter | Role | Edits code? | Decides? |
+|---|---|---|---|
+| `forge-engineer` | Implements one ticket, TDD, within its allowed paths | yes (allowed paths only) | no |
+| `forge-semantic-verifier` | Verifies acceptance is genuinely met vs repo reality | no (read-only) | verdict only |
+| `forge-scope-verifier` | Verifies the diff stays inside the path fences | no (read-only) | verdict only |
+| `forge-pm` | Synthesizes outputs, decides PASS / CORRECT / ESCALATE | no | yes |
+
+Each charter specifies its role, inputs, the governance docs it must read, what it must **not** do, a
+**structured YAML output schema**, escalation behavior, and **anti-theater rules** (verifiers must cite concrete
+evidence; "looks good" is invalid; the PM may not PASS over a REJECT without a recorded override + human escalation).
+
 ## Principles
 
 - The core is real, typed, unit-tested code — never prompt logic.
