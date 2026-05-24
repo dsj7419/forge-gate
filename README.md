@@ -1,5 +1,7 @@
 # ForgeGate
 
+> Deterministic, human-gated orchestration for Claude Code one-ticket engineering workflows.
+
 **ForgeGate** is a deterministic, human-gated orchestration layer for Claude Code — it structures one
 ticket of agent work, enforces path fences and verification, and stops at the commit gate. It is **not**
 a fully autonomous engineering system, and v1 makes no claim to be.
