@@ -146,3 +146,36 @@ describe("runCli", () => {
     expect(err.join("\n")).toMatch(/usage/i);
   });
 });
+
+const legacyFixture = path.join(fixturesDir, "..", "..", "importer", "__fixtures__", "legacy-sprint-5");
+
+describe("runCli import (dry-run)", () => {
+  test("prints a dry-run plan and exits 0, writing no validation artifact", () => {
+    const { io, out, artifacts } = fakeIo();
+    const code = runCli(["import", "--from-existing", legacyFixture, "--out", "/virtual/docs/epics/demo", "--dry-run"], io);
+
+    expect(code).toBe(0);
+    expect(out.join("\n")).toContain("epic.yaml");
+    expect(out.join("\n")).toMatch(/dry.run/i);
+    expect(artifacts).toHaveLength(0);
+  });
+
+  test("refuses live import (no --dry-run) with exit 2 for v1", () => {
+    const { io, err } = fakeIo();
+    const code = runCli(["import", "--from-existing", legacyFixture, "--out", "/virtual/docs/epics/demo"], io);
+
+    expect(code).toBe(2);
+    expect(err.join("\n")).toMatch(/dry-run/i);
+  });
+
+  test("requires --from-existing and --out (exit 2)", () => {
+    const { io } = fakeIo();
+    expect(runCli(["import", "--dry-run"], io)).toBe(2);
+  });
+
+  test("rejects an unknown import flag (exit 2)", () => {
+    const { io } = fakeIo();
+    const code = runCli(["import", "--from-existing", legacyFixture, "--out", "/x", "--dry-run", "--wat"], io);
+    expect(code).toBe(2);
+  });
+});

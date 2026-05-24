@@ -1,3 +1,4 @@
+import type { ImportPlan } from "../importer/import-findings.js";
 import type { ValidationFinding, ValidationReport } from "../validate/findings.js";
 import type { LoadedContract } from "../validate/load.js";
 
@@ -34,6 +35,22 @@ export function formatReportHuman(report: ValidationReport): string {
     `Result: ${report.ok ? "OK" : "FAILED"}`,
     findingCountLine(report.findings),
     ...report.findings.map(formatFinding),
+  ];
+  return lines.join("\n");
+}
+
+export function formatImportPlanHuman(plan: ImportPlan): string {
+  const mode = plan.dryRun ? "dry-run" : "live";
+  const lines = [
+    `Forge import (${mode}): ${plan.sourcePath} -> ${plan.outPath}`,
+    `Result: ${plan.ok ? "OK" : "ISSUES"}`,
+    `Files (${plan.files.length}):`,
+    ...plan.files.map((file) => `  [${file.action}] ${file.targetFile}`),
+    `Findings (${plan.findings.length}):`,
+    ...plan.findings.map((finding) => {
+      const where = finding.sourceFile !== undefined ? ` (${finding.sourceFile})` : "";
+      return `  [${finding.severity}] ${finding.code}  ${finding.message}${where}`;
+    }),
   ];
   return lines.join("\n");
 }
