@@ -46,6 +46,12 @@ describe("buildAgentDispatch — injected-charter fallback", () => {
     expect(d.prompt).toContain("Create `src/sandbox/add.ts`"); // AI instructions from the ticket body
   });
 
+  test("the engineer ticket section header honestly describes its content (body only, not front-matter)", () => {
+    const d = buildAgentDispatch("engineer", packets(), { registeredAvailable: false, agentsDir });
+    expect(d.prompt).toContain("## Ticket (body)"); // accurate label for the rendered body
+    expect(d.prompt).not.toContain("## Ticket (front-matter + body)"); // old, inaccurate label is gone
+  });
+
   test("the semantic-verifier prompt carries the acceptance criteria text", () => {
     const d = buildAgentDispatch("semantic-verifier", packets(), { registeredAvailable: false, agentsDir });
     expect(d.prompt).toContain("exports a pure function");

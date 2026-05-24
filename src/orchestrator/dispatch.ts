@@ -75,7 +75,7 @@ function renderContext(role: AgentRole, packets: RunPacketSet): string {
         `- ticket_file: ${p.ticket_file}`,
         `- verify_commands: ${JSON.stringify(p.verify_commands)}`,
         "",
-        "## Ticket (front-matter + body)",
+        "## Ticket (body)",
         p.ticket_body,
         "",
         "## Task",
