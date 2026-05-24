@@ -27,6 +27,16 @@ describe("validateReadiness", () => {
     expect(codesFor(ticket)).not.toContain("PATH_GLOB_OVERLAP");
   });
 
+  test("does not flag sibling prefixes (src/app vs src/application)", () => {
+    const ticket = makeTicket({ allowed_paths: ["src/app/**"], forbidden_paths: ["src/application/**"] });
+    expect(codesFor(ticket)).not.toContain("PATH_GLOB_OVERLAP");
+  });
+
+  test("does not flag a literal prefix that is not a path-boundary ancestor (src/app vs src/app2)", () => {
+    const ticket = makeTicket({ allowed_paths: ["src/app"], forbidden_paths: ["src/app2/**"] });
+    expect(codesFor(ticket)).not.toContain("PATH_GLOB_OVERLAP");
+  });
+
   // 2. Acceptance criteria
   test("flags a missing acceptance-criteria heading", () => {
     const ticket = makeTicket({}, { body: "# Title\n\nSome description, no criteria.\n" });
@@ -41,6 +51,11 @@ describe("validateReadiness", () => {
   test("accepts a populated acceptance section", () => {
     const ticket = makeTicket({}, { body: "## Acceptance\n\n- [ ] it works\n" });
     expect(codesFor(ticket)).not.toContain("ACCEPTANCE_CRITERIA_MISSING");
+  });
+
+  test("flags an acceptance section that is immediately followed by another heading", () => {
+    const ticket = makeTicket({}, { body: "## Acceptance Criteria\n\n## Notes\n\nSomething else\n" });
+    expect(codesFor(ticket)).toContain("ACCEPTANCE_CRITERIA_MISSING");
   });
 
   // 3. Verify commands required by kind
@@ -106,5 +121,30 @@ describe("validateReadiness", () => {
   test("flags a destructive keyword (rm -rf) in a verify command", () => {
     const ticket = makeTicket({ change_class: "feature", gate: "pr", verify_commands: ["rm -rf build"] });
     expect(codesFor(ticket)).toContain("AUTO_ESCALATION_REQUIRED");
+  });
+
+  test("flags an env-file path (.env.local) in allowed_paths", () => {
+    const ticket = makeTicket({ change_class: "feature", gate: "pr", allowed_paths: [".env.local"] });
+    expect(codesFor(ticket)).toContain("AUTO_ESCALATION_REQUIRED");
+  });
+
+  test("flags a migrations path in allowed_paths", () => {
+    const ticket = makeTicket({ change_class: "feature", gate: "pr", allowed_paths: ["migrations/create-user.sql"] });
+    expect(codesFor(ticket)).toContain("AUTO_ESCALATION_REQUIRED");
+  });
+
+  test("flags 'production' in the body", () => {
+    const ticket = makeTicket({ change_class: "feature", gate: "pr" }, { body: "## Acceptance Criteria\n\n- [ ] deploy to production\n" });
+    expect(codesFor(ticket)).toContain("AUTO_ESCALATION_REQUIRED");
+  });
+
+  test("flags a 'secret' path in forbidden_paths", () => {
+    const ticket = makeTicket({ change_class: "feature", gate: "pr", forbidden_paths: ["config/secret.json"] });
+    expect(codesFor(ticket)).toContain("AUTO_ESCALATION_REQUIRED");
+  });
+
+  test("does not escalate on 'product' (must not match the 'prod' keyword)", () => {
+    const ticket = makeTicket({ title: "Improve product onboarding", change_class: "feature", gate: "pr" });
+    expect(codesFor(ticket)).not.toContain("AUTO_ESCALATION_REQUIRED");
   });
 });

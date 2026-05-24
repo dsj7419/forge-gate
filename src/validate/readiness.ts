@@ -172,10 +172,17 @@ function ticketHaystack(ticket: LoadedTicket): string {
   return [fm.title, ticket.body, ...fm.allowed_paths, ...fm.forbidden_paths, ...fm.verify_commands].join("\n");
 }
 
-function escalationRequired(ticket: LoadedTicket): boolean {
-  if (HIGH_RISK_CHANGE_CLASSES.has(ticket.frontMatter.change_class)) return true;
+/** Returns a human-readable reason if the ticket requires escalation, else undefined. */
+function escalationReason(ticket: LoadedTicket): string | undefined {
+  if (HIGH_RISK_CHANGE_CLASSES.has(ticket.frontMatter.change_class)) {
+    return `change_class=${ticket.frontMatter.change_class}`;
+  }
   const haystack = ticketHaystack(ticket);
-  return HIGH_RISK_PATTERNS.some((pattern) => pattern.test(haystack));
+  for (const pattern of HIGH_RISK_PATTERNS) {
+    const keyword = pattern.exec(haystack)?.[0];
+    if (keyword) return `matched high-risk keyword "${keyword}"`;
+  }
+  return undefined;
 }
 
 function adequatelyGated(ticket: LoadedTicket): boolean {
@@ -187,11 +194,12 @@ function autoEscalationRequired(contract: LoadedContract): ValidationFinding[] {
   const findings: ValidationFinding[] = [];
   for (const sprint of contract.sprints) {
     for (const ticket of sprint.tickets) {
-      if (escalationRequired(ticket) && !adequatelyGated(ticket)) {
+      const reason = escalationReason(ticket);
+      if (reason && !adequatelyGated(ticket)) {
         findings.push(
           error(
             Code.AUTO_ESCALATION_REQUIRED,
-            `high-risk ticket must use gate: manual or a recorded gate_override (change_class=${ticket.frontMatter.change_class})`,
+            `high-risk ticket must use gate: manual or a recorded gate_override (${reason})`,
             { sprint: sprint.id, ticket: ticket.frontMatter.id, file: ticket.file },
           ),
         );
