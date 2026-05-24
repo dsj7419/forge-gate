@@ -1,0 +1,7 @@
+schema_version: 1
+id: demo-epic
+sprints:
+  - sprint-05-foundation
+gate_policy:
+  default_push: robot
+  default_merge: human
