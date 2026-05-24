@@ -1,0 +1,7 @@
+node_modules/
+dist/
+coverage/
+*.log
+
+# Forge runtime state (ephemeral; never committed)
+.forge/
