@@ -1,0 +1,8 @@
+schema_version: 1
+id: sandbox-epic
+title: Sandbox Epic (orchestration proof)
+sprints:
+  - sprint-01-sandbox
+gate_policy:
+  default_push: human
+  default_merge: human
