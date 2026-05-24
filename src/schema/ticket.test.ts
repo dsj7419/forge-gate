@@ -51,4 +51,33 @@ describe("TicketFrontMatterSchema", () => {
   test("rejects an unsupported schema_version", () => {
     expect(TicketFrontMatterSchema.safeParse({ ...validTicket, schema_version: 2 }).success).toBe(false);
   });
+
+  test("rejects a single-digit ticket id (T1)", () => {
+    expect(TicketFrontMatterSchema.safeParse({ ...validTicket, id: "T1" }).success).toBe(false);
+  });
+
+  test("rejects a whitespace-only title", () => {
+    expect(TicketFrontMatterSchema.safeParse({ ...validTicket, title: "   " }).success).toBe(false);
+  });
+
+  test("rejects an empty allowed_paths entry", () => {
+    expect(TicketFrontMatterSchema.safeParse({ ...validTicket, allowed_paths: [""] }).success).toBe(false);
+  });
+
+  test("rejects a whitespace-only verify_commands entry", () => {
+    expect(TicketFrontMatterSchema.safeParse({ ...validTicket, verify_commands: ["  "] }).success).toBe(false);
+  });
+
+  test("rejects gate_override true without a rationale", () => {
+    expect(TicketFrontMatterSchema.safeParse({ ...validTicket, gate_override: true }).success).toBe(false);
+  });
+
+  test("accepts gate_override true with a rationale", () => {
+    const result = TicketFrontMatterSchema.safeParse({
+      ...validTicket,
+      gate_override: true,
+      gate_override_rationale: "security ticket: human pre-approved auto-merge",
+    });
+    expect(result.success).toBe(true);
+  });
 });

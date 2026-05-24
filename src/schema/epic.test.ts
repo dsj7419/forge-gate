@@ -5,7 +5,7 @@ import { EpicSchema } from "./epic.js";
 const validEpic = {
   schema_version: 1,
   id: "idle-engine",
-  sprints: ["sprint-05", "sprint-06"],
+  sprints: ["sprint-05-foundation", "sprint-06-runtime"],
   gate_policy: { default_push: "human", default_merge: "human" },
 };
 
@@ -22,5 +22,13 @@ describe("EpicSchema", () => {
     const bad: Record<string, unknown> = { ...validEpic };
     delete bad.sprints;
     expect(EpicSchema.safeParse(bad).success).toBe(false);
+  });
+
+  test("rejects a whitespace-only sprint entry", () => {
+    expect(EpicSchema.safeParse({ ...validEpic, sprints: ["   "] }).success).toBe(false);
+  });
+
+  test("rejects a non-canonical sprint entry", () => {
+    expect(EpicSchema.safeParse({ ...validEpic, sprints: ["sprint-5"] }).success).toBe(false);
   });
 });

@@ -3,10 +3,25 @@ import { z } from "zod";
 /** The only contract schema version this build understands. */
 export const SCHEMA_VERSION = 1;
 
-/** Ticket identifiers: a capital T followed by digits (e.g. T01, T03, T100). */
+/** A trimmed, non-empty string. Rejects "" and whitespace-only values. */
+export const NonEmptyStringSchema = z.string().trim().min(1);
+
+/**
+ * Ticket identifiers: a capital T followed by >= 2 digits (T01, T03, T100).
+ * T1 is intentionally rejected so ids sort lexicographically and manifests stay tidy.
+ */
 export const TicketIdSchema = z
   .string()
-  .regex(/^T\d+$/, "ticket id must match /^T\\d+$/ (e.g. T03)");
+  .regex(/^T\d{2,}$/, "ticket id must match /^T\\d{2,}$/ (e.g. T03; T1 is rejected)");
+
+/** Canonical sprint folder identifier: sprint-NN-slug (e.g. sprint-05-runtime-actor). */
+export const SprintIdSchema = z
+  .string()
+  .trim()
+  .regex(
+    /^sprint-\d{2,}-[a-z0-9-]+$/,
+    "sprint id must match sprint-NN-slug (e.g. sprint-05-runtime-actor)",
+  );
 
 export const KindEnum = z.enum(["plan", "red", "green", "closeout"]);
 export const RiskEnum = z.enum(["low", "medium", "high", "critical"]);
@@ -39,6 +54,7 @@ export const GateActorEnum = z.enum(["human", "auto"]);
 export const MergeStrategyEnum = z.enum(["squash", "merge", "rebase"]);
 
 export type TicketId = z.infer<typeof TicketIdSchema>;
+export type SprintId = z.infer<typeof SprintIdSchema>;
 export type Kind = z.infer<typeof KindEnum>;
 export type Risk = z.infer<typeof RiskEnum>;
 export type ChangeClass = z.infer<typeof ChangeClassEnum>;

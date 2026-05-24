@@ -5,7 +5,7 @@ import { ManifestSchema } from "./manifest.js";
 
 const validManifest = {
   schema_version: 1,
-  sprint: "sprint-05",
+  sprint: "sprint-05-runtime",
   gate_policy: { default_push: "human", default_merge: "human" },
   tickets: [
     { id: "T01", kind: "plan", status: "merged" },
@@ -45,5 +45,21 @@ describe("ManifestSchema", () => {
   test("rejects a ticket entry with an invalid status", () => {
     const bad = { ...validManifest, tickets: [{ id: "T01", kind: "plan", status: "done" }] };
     expect(ManifestSchema.safeParse(bad).success).toBe(false);
+  });
+
+  test("defaults a ticket entry's blocks to an empty array", () => {
+    const result = ManifestSchema.safeParse(validManifest);
+
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error(JSON.stringify(result.error.issues));
+    expect(result.data.tickets[0]?.blocks).toEqual([]);
+  });
+
+  test("rejects an empty tickets array", () => {
+    expect(ManifestSchema.safeParse({ ...validManifest, tickets: [] }).success).toBe(false);
+  });
+
+  test("rejects a non-canonical sprint id", () => {
+    expect(ManifestSchema.safeParse({ ...validManifest, sprint: "sprint-5" }).success).toBe(false);
   });
 });
