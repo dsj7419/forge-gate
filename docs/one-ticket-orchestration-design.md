@@ -103,6 +103,11 @@ stateDiagram-v2
 
 ## 7. Dispatch packets (exact inputs per agent)
 
+**Every packet MUST pin the absolute `repo_root`** and instruct the agent to run all tools from it
+(`cd <repo_root>` first; verify with `git -C <repo_root> rev-parse --is-inside-work-tree`). Agents must
+**not** inspect sibling or default directories — **evidence gathered from the wrong cwd is invalid
+evidence** (see §14). The packet also carries `branch`, `ticket`, `allowed_paths`, `forbidden_paths`.
+
 Built by the orchestrator from the contract + git; each agent gets only what it needs.
 
 - **engineer:** ticket front-matter + body; governance docs; `allowed_paths`/`forbidden_paths`; branch; prior
@@ -170,3 +175,30 @@ The human inspects the working tree and commits if satisfied. A later increment 
   unknown top-level field fails.
 
 Only after this is green do we design/build the ad-hoc first live one-ticket run.
+
+## 14. Findings from the first live run (2026-05-24, sandbox proof)
+
+The first live one-ticket run (on a sterile sandbox epic) completed the full loop to a PASS at the commit
+gate **and** surfaced a real orchestration bug — safely, with zero durable damage. Record these before
+packaging `/forge-run-ticket`:
+
+1. **Every dispatch packet must include an absolute `repo_root`.**
+2. **Every agent must run its tools from `repo_root`** (`cd` there first; verify it is the git repo).
+3. **Evidence gathered from the wrong cwd is invalid evidence.** (The first PM dispatch inspected the
+   harness session cwd — a different, non-git project — and wrongly concluded the real, green work was
+   fabricated. Re-dispatch with a pinned `repo_root` returned PASS on the same work.)
+4. **Registered Forge subagent types were unavailable in this harness**, so `forge-engineer` /
+   `-semantic-verifier` / `-scope-verifier` / `-pm` were run as a generic agent with the charter embedded.
+5. The orchestrator must therefore **either dispatch the registered charters reliably, or inject charter
+   text into a generic agent deterministically** — and must not assume the registered type exists.
+6. **PM packets must include the validated structured outputs (engineer + both verifiers) and the
+   orchestrator-confirmed in-repo facts** (parse-validation results, test/typecheck results, changed files,
+   git state) — not summaries.
+7. **The PM must not free-roam sibling/default directories.** It judges the validated outputs and may
+   spot-check **only** within `repo_root`. (A registered `forge-pm` with a scoped read-only tool allowlist
+   helps, but cwd-pinning is the primary control.)
+
+**Why this validated the safety model:** schema validation confirmed the (wrong) PM escalation was
+*well-formed* — proving structure-validation ≠ truth — while the no-auto-commit / human-gated posture meant
+the wrong conclusion cost nothing. The loop, the fences, the evidence-based verifiers, and the structured-
+output validator all worked; the gap was orchestration cwd hygiene, now recorded as a hard requirement.
