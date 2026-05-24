@@ -18,7 +18,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "forge": "tsx src/cli.ts"
+    "forge": "tsx src/cli.ts",
+    "install-commands": "node scripts/install-commands.mjs"
   },
   "engines": {
     "node": ">=22"

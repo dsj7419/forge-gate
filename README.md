@@ -76,6 +76,37 @@ pnpm forge validate <epic-path>             # dev run via tsx
 node dist/cli.js validate <epic-path>       # run the built binary
 ```
 
+## Claude Code wrappers (convenience surface)
+
+**Forge Core (this CLI) is the source of truth.** The Claude Code slash commands are *thin* wrappers
+that shell out to the `forge` CLI and summarize its output — they add no logic, never edit source, and
+never invent metadata.
+
+| Command | Runs |
+|---|---|
+| `/forge-validate <epic-path>` | `forge validate <epic-path>` |
+| `/forge-status <epic-path>` | `forge status <epic-path>` |
+| `/forge-import --from-existing <legacy> --out <epic-root> [--dry-run]` | `forge import ...` |
+| `/forge-run-dry-run <epic-path>` | `forge run <epic-path> --dry-run` |
+
+Canonical wrapper sources live in `commands/`. Install them into `~/.claude/commands/` with:
+
+```bash
+pnpm install-commands
+```
+
+**Binary resolution** (in each wrapper): `forge` on `PATH` → `$FORGE_BIN` → (local-dev only)
+`pnpm -C "${FORGE_REPO:-<forge-repo>}" forge ...`. To put `forge` on `PATH`: `pnpm build` then
+`pnpm link --global`.
+
+### Wrapper smoke checklist (manual)
+
+- `/forge-validate <fixture>` → shows `OK`/`FAILED` + findings.
+- `/forge-status <fixture>` → shows epic / sprint ids / ticket counts.
+- `/forge-import --from-existing <legacy> --out <tmp> --dry-run` → planned target files + ambiguity findings; nothing written.
+- `/forge-run-dry-run <fixture>` → next ready ticket + "No files changed"; an invalid contract shows `BLOCKED`.
+- No wrapper edits source or contract files.
+
 ## Principles
 
 - The core is real, typed, unit-tested code — never prompt logic.
