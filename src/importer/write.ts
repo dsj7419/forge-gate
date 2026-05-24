@@ -19,6 +19,8 @@ import { scanLegacySprint } from "./scan.js";
 export type ImportResult = {
   ok: boolean;
   wrote: boolean;
+  sourcePath: string;
+  outPath: string;
   createdFiles: string[];
   importFindings: ImportFinding[];
   validation?: ValidationReport;
@@ -51,7 +53,7 @@ export function executeImport(sourcePath: string, outPath: string): ImportResult
   const importFindings = [...plan.findings];
 
   if (importFindings.some((finding) => finding.code === ImportCode.IMPORT_SOURCE_MISSING)) {
-    return { ok: false, wrote: false, createdFiles: [], importFindings, generatedContractValid: false };
+    return { ok: false, wrote: false, sourcePath, outPath, createdFiles: [], importFindings, generatedContractValid: false };
   }
 
   if (outputNonEmpty(outPath)) {
@@ -60,7 +62,7 @@ export function executeImport(sourcePath: string, outPath: string): ImportResult
         targetFile: outPath,
       }),
     );
-    return { ok: false, wrote: false, createdFiles: [], importFindings, generatedContractValid: false };
+    return { ok: false, wrote: false, sourcePath, outPath, createdFiles: [], importFindings, generatedContractValid: false };
   }
 
   const scan = scanLegacySprint(sourcePath);
@@ -94,12 +96,21 @@ export function executeImport(sourcePath: string, outPath: string): ImportResult
 
   const validation = validateContract(outPath);
   const generatedContractValid = validation.ok;
-
-  writeFileEnsured(
-    path.join(outPath, ".forge", "import-report.json"),
-    `${JSON.stringify({ createdFiles: created, importFindings, validation, generatedContractValid }, null, 2)}\n`,
-  );
-
   const ok = generatedContractValid && !importFindings.some((finding) => finding.severity === "error");
-  return { ok, wrote: true, createdFiles: created, importFindings, validation, generatedContractValid };
+
+  const result: ImportResult = {
+    ok,
+    wrote: true,
+    sourcePath,
+    outPath,
+    createdFiles: created,
+    importFindings,
+    validation,
+    generatedContractValid,
+  };
+
+  // Self-contained, machine-readable import report (written after validation so it captures the outcome).
+  writeFileEnsured(path.join(outPath, ".forge", "import-report.json"), `${JSON.stringify(result, null, 2)}\n`);
+
+  return result;
 }

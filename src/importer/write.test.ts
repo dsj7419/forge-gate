@@ -48,6 +48,8 @@ describe("executeImport (live write)", () => {
     expect(fs.readFileSync(path.join(out, "sprint-05-imported", "SPRINT.md"), "utf8")).toContain("legacy sprint overview");
     expect(fs.readFileSync(path.join(out, "sprint-05-imported", "tickets", "T01-planning.md"), "utf8")).toContain("Sprint plan written");
     expect(result.validation).toBeDefined();
+    expect(result.sourcePath).toBe(legacy);
+    expect(result.outPath).toBe(out);
     expect(fs.readdirSync(legacy).length).toBe(sourceFilesBefore);
   });
 

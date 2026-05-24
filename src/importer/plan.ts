@@ -154,6 +154,10 @@ export function ticketFindings(derived: DerivedTicket, targetFile: string): Impo
   if (!derived.hasAcceptance) {
     findings.push(importFinding("warning", ImportCode.IMPORT_MISSING_ACCEPTANCE_CRITERIA, `ticket ${derived.id}: no Acceptance Criteria section found in legacy content`, at));
   }
+  // Legacy tickets carry no canonical verify_commands; red/green tickets need them to be execution-ready.
+  if (derived.kind === "red" || derived.kind === "green") {
+    findings.push(importFinding("warning", ImportCode.IMPORT_AMBIGUOUS_VERIFY_COMMANDS, `ticket ${derived.id}: a ${derived.kind} ticket needs verify_commands; none found in legacy content`, at));
+  }
   findings.push(importFinding("info", ImportCode.IMPORT_PROSE_PRESERVED, `ticket ${derived.id}: legacy prose preserved from ${derived.basename}`, at));
   return findings;
 }

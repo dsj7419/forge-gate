@@ -21,7 +21,29 @@ forge validate <epic-path>          Validate a contract. Prints a human-readable
 forge validate <epic-path> --json   Print the full ValidationReport as JSON. Writes no artifact.
 forge status <epic-path>            Summarize epic id, sprint ids, ticket counts, finding totals.
                                      Exit 0 normally; exit 1 only if the contract cannot load at all.
+
+forge import --from-existing <legacy-sprint-path> --out <epic-root> --dry-run
+                                     Plan an import: list canonical target files and flag ambiguity.
+                                     Read-only; writes nothing.
+forge import --from-existing <legacy-sprint-path> --out <epic-root>
+                                     Live import: generate the canonical contract and validate it.
+forge import ... --json              Emit the import plan / result as JSON.
 ```
+
+### Importing legacy sprints
+
+`forge import` normalizes a legacy (pre-Forge) sprint folder into the canonical contract.
+
+- **Overwrite policy:** the output directory must be empty or non-existent. A non-empty `--out`
+  is refused with `IMPORT_OUTPUT_EXISTS`. There is **no `--force`** in v1.
+- The legacy source folder is never modified. Prose is preserved verbatim in the generated
+  `SPRINT.md`, `DECISIONS.md`, and ticket bodies. A self-contained `.forge/import-report.json`
+  is written.
+- **Import-draft semantics:** when a required canonical field (e.g. `risk`, `change_class`,
+  `blast_radius`) is ambiguous in the legacy source, the importer writes a `TODO` placeholder
+  **rather than inventing a value**. Such a contract is a *human-completion draft*: `validateContract`
+  intentionally flags those fields, the command prints "requires human completion before execution,"
+  and exits non-zero. Complete the `TODO`s, then `forge validate` until the contract is clean.
 
 ### Exit codes
 

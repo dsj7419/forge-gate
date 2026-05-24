@@ -28,6 +28,16 @@ export function generateManifestYaml(sprintId: string, entries: Array<{ id: stri
   ].join("\n");
 }
 
+/**
+ * Generate a canonical ticket file from a derived legacy ticket.
+ *
+ * Import-draft semantics: when a required canonical field was ambiguous in the
+ * legacy source, this writes a `TODO` placeholder rather than inventing a value.
+ * That makes the generated front-matter intentionally fail schema validation
+ * until a human completes it — the output is a human-completion draft, not
+ * execution-ready Forge input. (Design debt: a future "valid-but-blocked"
+ * model — e.g. status: blocked + gate: manual — would avoid invalid YAML.)
+ */
 export function generateTicketMd(ticket: DerivedTicket): string {
   const frontMatter = [
     "---",
@@ -40,6 +50,7 @@ export function generateTicketMd(ticket: DerivedTicket): string {
     `blast_radius: ${ticket.blast_radius ?? TODO}`,
     "status: pending",
     "gate: pr",
+    "gate_override: false",
     "verify_commands: []",
     "---",
   ].join("\n");

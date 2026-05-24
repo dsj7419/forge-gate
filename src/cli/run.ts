@@ -18,7 +18,7 @@ export type CliIo = {
 const USAGE =
   "usage: forge validate <epic-path> [--json]\n" +
   "       forge status <epic-path>\n" +
-  "       forge import --from-existing <legacy-sprint-path> --out <epic-root> --dry-run [--json]";
+  "       forge import --from-existing <legacy-sprint-path> --out <epic-root> [--dry-run] [--json]";
 
 export function runCli(argv: string[], io: CliIo): number {
   const [command, epicPath, ...flags] = argv;

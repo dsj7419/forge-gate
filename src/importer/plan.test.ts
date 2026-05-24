@@ -45,6 +45,7 @@ describe("planImport (dry-run)", () => {
     expect(codes).toContain("IMPORT_AMBIGUOUS_CHANGE_CLASS");
     expect(codes).toContain("IMPORT_AMBIGUOUS_BLAST_RADIUS");
     expect(codes).toContain("IMPORT_MISSING_ACCEPTANCE_CRITERIA");
+    expect(codes).toContain("IMPORT_AMBIGUOUS_VERIFY_COMMANDS"); // T02 is a green ticket with no commands
     // Unknown file is skipped, decisions migrated, dry-run noted.
     expect(codes).toContain("IMPORT_SKIPPED_UNKNOWN_FILE");
     expect(codes).toContain("IMPORT_DECISIONS_MIGRATED");

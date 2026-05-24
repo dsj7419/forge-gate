@@ -44,6 +44,7 @@ describe("content generators", () => {
     if (!fm.ok) throw new Error("expected front-matter");
     expect(TicketFrontMatterSchema.safeParse(fm.data).success).toBe(true);
     expect(fm.body).toContain("Acceptance Criteria");
+    expect(md).toContain("gate_override: false");
   });
 
   test("generateTicketMd writes TODO for ambiguous fields and stays schema-invalid until completed", () => {
