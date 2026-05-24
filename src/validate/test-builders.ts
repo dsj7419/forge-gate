@@ -21,6 +21,7 @@ export function makeTicket(
     blast_radius: "module",
     status: "pending",
     gate: "pr",
+    verify_commands: ["echo verify"],
     ...front,
   });
   return {
@@ -44,11 +45,14 @@ function entryFromTicket(ticket: LoadedTicket): ManifestTicketEntry {
   });
 }
 
+const HUMAN_GATE_POLICY = { default_push: "human", default_merge: "human" } as const;
+
 export function makeSprint(opts: {
   id?: string;
   manifestSprint?: string;
   tickets?: LoadedTicket[];
   entries?: ManifestTicketEntry[];
+  gatePolicy?: Record<string, unknown>;
 } = {}): LoadedSprint {
   const id = opts.id ?? "sprint-05-foundation";
   const tickets = opts.tickets ?? [makeTicket()];
@@ -56,19 +60,19 @@ export function makeSprint(opts: {
   const manifest = ManifestSchema.parse({
     schema_version: 1,
     sprint: opts.manifestSprint ?? id,
-    gate_policy: { default_push: "human", default_merge: "human" },
+    gate_policy: opts.gatePolicy ?? HUMAN_GATE_POLICY,
     tickets: entries.length > 0 ? entries : [makeEntry()],
   });
   return { id, manifestFile: `${id}/manifest.yaml`, manifest, tickets };
 }
 
-export function makeContract(opts: { sprints?: LoadedSprint[] } = {}): LoadedContract {
+export function makeContract(opts: { sprints?: LoadedSprint[]; gatePolicy?: Record<string, unknown> } = {}): LoadedContract {
   const sprints = opts.sprints ?? [makeSprint()];
   const epic = EpicSchema.parse({
     schema_version: 1,
     id: "demo-epic",
     sprints: sprints.map((sprint) => sprint.id),
-    gate_policy: { default_push: "human", default_merge: "human" },
+    gate_policy: opts.gatePolicy ?? HUMAN_GATE_POLICY,
   });
   return { epicPath: "/virtual/epic", epicFile: "epic.yaml", epic, sprints };
 }
