@@ -10,7 +10,7 @@ a fully autonomous engineering system, and v1 makes no claim to be.
 from a plain terminal and is consumed by Claude Code command wrappers, never the other way around.
 (The package is `forge-core` and the binary is `forge`.)
 
-> Design spec: `../apitest/docs/superpowers/specs/2026-05-23-agent-epic-pipeline-design.md`
+> Design notes: [`docs/one-ticket-orchestration-design.md`](docs/one-ticket-orchestration-design.md) · [`docs/forge-run-ticket-design.md`](docs/forge-run-ticket-design.md)
 
 ## Status
 
@@ -142,7 +142,7 @@ node dist/cli.js validate <epic-path>       # run the built binary
 ### CLI resolver and environment
 
 Each Claude Code wrapper invokes a single deterministic command —
-`node "${FORGE_REPO:-<forge-repo>}/scripts/run-forge-cli.mjs" <subcommand> $ARGUMENTS` — so the tool
+`node "${FORGE_REPO}/scripts/run-forge-cli.mjs" <subcommand> $ARGUMENTS` — so the tool
 allowlist (`Bash(node:*)`) matches cleanly without a compound shell snippet. The resolver script picks the
 CLI in this order:
 
@@ -150,8 +150,8 @@ CLI in this order:
 2. **`forge` on `PATH`** — e.g. after `pnpm build` then `pnpm link --global`.
 3. **local-dev `pnpm -C <repo> forge`** — the tsx-based dev fallback.
 
-`FORGE_REPO` is the path to this wrapper repo; it defaults to the **local-dev** repo path, so set it (or
-link the CLI globally) for real use.
+`FORGE_REPO` is the path to your forge-gate checkout; **set it** (or `pnpm link --global` the CLI so
+`forge` is on `PATH`) so the wrappers can locate the CLI.
 
 ## Claude Code wrappers (convenience surface)
 

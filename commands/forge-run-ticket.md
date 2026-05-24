@@ -5,8 +5,8 @@ allowed-tools: Bash(node:*), Bash(git:*), Task, Read
 ---
 You are the **Forge orchestrator** for ONE ticket. You are *mechanical*: you dispatch agents, run the
 deterministic Forge CLI, do git, and pause at gates — you make **no** code judgments yourself. Forge Core is
-the source of truth. Resolve the CLI as `FORGE="node ${FORGE_REPO:-D:/Projects/forge}/scripts/run-forge-cli.mjs"`.
-Let `EPIC = $ARGUMENTS`, `REPO = ${FORGE_REPO:-D:/Projects/forge}`.
+the source of truth. Resolve the CLI as `FORGE="node ${FORGE_REPO:?set FORGE_REPO to your forge-gate checkout}/scripts/run-forge-cli.mjs"`.
+Let `EPIC = $ARGUMENTS`, `REPO = ${FORGE_REPO:?set FORGE_REPO to your forge-gate checkout}`.
 
 ## Hard constraints (v1 — never violate)
 No commit, push, PR, merge. No status write-back. No journal write. No edits to manifest/ticket/governance/

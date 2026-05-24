@@ -10,11 +10,11 @@ Run **exactly** this single command with the Bash tool (after `$ARGUMENTS` is su
 output faithfully:
 
 ```bash
-node "${FORGE_REPO:-D:/Projects/forge}/scripts/run-forge-cli.mjs" import $ARGUMENTS
+node "${FORGE_REPO:?set FORGE_REPO to your forge-gate checkout}/scripts/run-forge-cli.mjs" import $ARGUMENTS
 ```
 
 The resolver picks the Forge CLI deterministically: `$FORGE_BIN` → `forge` on `PATH` → local-dev `pnpm`
-fallback. `FORGE_REPO` defaults to the **local-dev** repo path.
+fallback. `FORGE_REPO` must point to your forge-gate checkout (or put `forge` on `PATH`).
 
 Then relay the outcome:
 - **Dry-run** (`--dry-run`): planned canonical target files + all ambiguity findings; nothing is written.

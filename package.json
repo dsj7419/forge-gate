@@ -3,6 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "description": "Forge — deterministic core for agent-driven epic execution. CLI-first; runtime-agnostic.",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "forge": "./dist/cli.js"

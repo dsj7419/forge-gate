@@ -10,11 +10,11 @@ Run **exactly** this single command with the Bash tool (after `$ARGUMENTS` is su
 output faithfully:
 
 ```bash
-node "${FORGE_REPO:-D:/Projects/forge}/scripts/run-forge-cli.mjs" run $ARGUMENTS --dry-run
+node "${FORGE_REPO:?set FORGE_REPO to your forge-gate checkout}/scripts/run-forge-cli.mjs" run $ARGUMENTS --dry-run
 ```
 
 The resolver picks the Forge CLI deterministically: `$FORGE_BIN` → `forge` on `PATH` → local-dev `pnpm`
-fallback. `FORGE_REPO` defaults to the **local-dev** repo path.
+fallback. `FORGE_REPO` must point to your forge-gate checkout (or put `forge` on `PATH`).
 
 Then relay the plan faithfully: next ready ticket (or `BLOCKED` + reasons), dependency reasoning,
 allowed/forbidden paths, verify commands, declared vs effective gate, proposed branch, and the agent chain

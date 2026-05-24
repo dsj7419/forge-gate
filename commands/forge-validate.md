@@ -10,11 +10,11 @@ Run **exactly** this single command with the Bash tool (after `$ARGUMENTS` is su
 output faithfully:
 
 ```bash
-node "${FORGE_REPO:-D:/Projects/forge}/scripts/run-forge-cli.mjs" validate $ARGUMENTS
+node "${FORGE_REPO:?set FORGE_REPO to your forge-gate checkout}/scripts/run-forge-cli.mjs" validate $ARGUMENTS
 ```
 
 The resolver picks the Forge CLI deterministically: `$FORGE_BIN` → `forge` on `PATH` → local-dev
-`pnpm` fallback. `FORGE_REPO` defaults to the **local-dev** repo path; set it (or `pnpm link --global`
+`pnpm` fallback. `FORGE_REPO` must point to your forge-gate checkout; set it (or `pnpm link --global`
 the CLI) for real use.
 
 Then report: `OK` or `FAILED`, and every finding (code, message, file/sprint/ticket). If `FAILED`, say the
