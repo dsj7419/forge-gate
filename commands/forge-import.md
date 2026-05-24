@@ -1,25 +1,20 @@
 ---
 description: Import a legacy sprint folder into a Forge contract using the Forge CLI.
 argument-hint: --from-existing <legacy-sprint-path> --out <epic-root> [--dry-run]
-allowed-tools: Bash(forge:*), Bash(pnpm:*)
+allowed-tools: Bash(node:*)
 ---
 Thin wrapper around the **Forge CLI** importer. Forge Core is the source of truth — this command adds
 no import logic and never invents missing metadata.
 
-Run **exactly** the following with the Bash tool (after `$ARGUMENTS` is substituted), then relay the
-CLI output faithfully. Binary resolution: `$FORGE_BIN` overrides `PATH`; then `forge` on `PATH`; then a
-**local-dev-only** `pnpm` fallback.
+Run **exactly** this single command with the Bash tool (after `$ARGUMENTS` is substituted), then relay the
+output faithfully:
 
 ```bash
-# FORGE_REPO is a LOCAL-DEV fallback only. For real use, set FORGE_BIN or `pnpm link --global` the CLI.
-if [ -n "$FORGE_BIN" ]; then
-  "$FORGE_BIN" import $ARGUMENTS
-elif command -v forge >/dev/null 2>&1; then
-  forge import $ARGUMENTS
-else
-  pnpm -C "${FORGE_REPO:-D:/Projects/forge}" forge import $ARGUMENTS
-fi
+node "${FORGE_REPO:-D:/Projects/forge}/scripts/run-forge-cli.mjs" import $ARGUMENTS
 ```
+
+The resolver picks the Forge CLI deterministically: `$FORGE_BIN` → `forge` on `PATH` → local-dev `pnpm`
+fallback. `FORGE_REPO` defaults to the **local-dev** repo path.
 
 Then relay the outcome:
 - **Dry-run** (`--dry-run`): planned canonical target files + all ambiguity findings; nothing is written.

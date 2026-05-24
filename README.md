@@ -95,10 +95,12 @@ Canonical wrapper sources live in `commands/`. Install them into `~/.claude/comm
 pnpm install-commands
 ```
 
-**Binary resolution** (deterministic, in each wrapper, in order): `$FORGE_BIN` (overrides PATH, lets you
-pin a build) → `forge` on `PATH` → **local-dev-only** `pnpm -C "${FORGE_REPO:-<forge-repo>}" forge ...`.
-To put `forge` on `PATH`: `pnpm build` then `pnpm link --global`. The hardcoded `FORGE_REPO` default is
-local-dev only — set `FORGE_REPO` or link the CLI globally for real use.
+**Binary resolution.** Each wrapper invokes a single deterministic command —
+`node "${FORGE_REPO:-<forge-repo>}/scripts/run-forge-cli.mjs" <subcommand> $ARGUMENTS` — so the tool
+allowlist (`Bash(node:*)`) matches cleanly without a compound shell snippet. The resolver script picks the
+CLI in order: `$FORGE_BIN` (overrides PATH, pins a build) → `forge` on `PATH` → local-dev `pnpm -C <repo> forge`.
+To put `forge` on `PATH`: `pnpm build` then `pnpm link --global`. `FORGE_REPO` defaults to the **local-dev**
+repo path — set it or link the CLI globally for real use.
 
 ### Wrapper smoke checklist (manual, inside Claude Code)
 
