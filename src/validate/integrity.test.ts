@@ -113,4 +113,56 @@ describe("validateIntegrity", () => {
     });
     expect(codesOf(contract)).toContain("MANIFEST_TICKET_BLOCKS_MISMATCH");
   });
+
+  test("flags a single-digit filename prefix (T1) as a mismatch", () => {
+    const ticket = makeTicket({ id: "T01" }, { file: "sprint-05-foundation/tickets/T1-bad.md" });
+    const contract = makeContract({ sprints: [makeSprint({ tickets: [ticket], entries: [makeEntry({ id: "T01" })] })] });
+    expect(codesOf(contract)).toContain("TICKET_FILENAME_ID_MISMATCH");
+  });
+
+  test("flags a filename whose id is not delimited (T01bad) as a mismatch", () => {
+    const ticket = makeTicket({ id: "T01" }, { file: "sprint-05-foundation/tickets/T01bad.md" });
+    const contract = makeContract({ sprints: [makeSprint({ tickets: [ticket], entries: [makeEntry({ id: "T01" })] })] });
+    expect(codesOf(contract)).toContain("TICKET_FILENAME_ID_MISMATCH");
+  });
+
+  test("accepts a canonical delimited filename (T01-good)", () => {
+    const ticket = makeTicket({ id: "T01" }, { file: "sprint-05-foundation/tickets/T01-good.md" });
+    const contract = makeContract({ sprints: [makeSprint({ tickets: [ticket], entries: [makeEntry({ id: "T01" })] })] });
+    expect(validateIntegrity(contract)).toEqual([]);
+  });
+
+  test("detects duplicate ids within a single manifest", () => {
+    const contract = makeContract({
+      sprints: [makeSprint({ tickets: [makeTicket({ id: "T01" })], entries: [makeEntry({ id: "T01" }), makeEntry({ id: "T01" })] })],
+    });
+    expect(codesOf(contract)).toContain("DUPLICATE_TICKET_ID");
+  });
+
+  test("detects a missing dependency referenced only by a manifest entry", () => {
+    const contract = makeContract({
+      sprints: [makeSprint({ tickets: [makeTicket({ id: "T01" })], entries: [makeEntry({ id: "T01", depends_on: ["T99"] })] })],
+    });
+    expect(codesOf(contract)).toContain("DEPENDENCY_MISSING");
+  });
+
+  test("treats depends_on as a set: reordered arrays are not a mismatch", () => {
+    const contract = makeContract({
+      sprints: [
+        makeSprint({
+          tickets: [
+            makeTicket({ id: "T01", depends_on: ["T02", "T03"] }),
+            makeTicket({ id: "T02" }),
+            makeTicket({ id: "T03" }),
+          ],
+          entries: [
+            makeEntry({ id: "T01", depends_on: ["T03", "T02"] }),
+            makeEntry({ id: "T02" }),
+            makeEntry({ id: "T03" }),
+          ],
+        }),
+      ],
+    });
+    expect(codesOf(contract)).not.toContain("MANIFEST_TICKET_DEPENDENCY_MISMATCH");
+  });
 });
