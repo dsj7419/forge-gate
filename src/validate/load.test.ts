@@ -60,4 +60,37 @@ describe("loadContract", () => {
     expect(result.contract?.sprints).toHaveLength(1);
     expect(result.contract?.sprints[0]?.tickets).toHaveLength(0);
   });
+
+  test("reports EPIC_SCHEMA_INVALID for syntactically malformed epic YAML", () => {
+    const result = loadContract(fx("malformed-epic"));
+
+    expect(result.contract).toBeUndefined();
+    expect(result.findings.map((finding) => finding.code)).toContain("EPIC_SCHEMA_INVALID");
+  });
+
+  test("reports MANIFEST_SCHEMA_INVALID for syntactically malformed manifest YAML", () => {
+    const result = loadContract(fx("malformed-manifest"));
+
+    expect(result.findings.map((finding) => finding.code)).toContain("MANIFEST_SCHEMA_INVALID");
+    expect(result.contract?.sprints).toHaveLength(0);
+  });
+
+  test("reports TICKETS_DIR_MISSING but still loads the sprint when the manifest is valid", () => {
+    const result = loadContract(fx("no-tickets-dir"));
+
+    const codes = result.findings.map((finding) => finding.code);
+    expect(codes).toContain("TICKETS_DIR_MISSING");
+    expect(result.contract?.sprints).toHaveLength(1);
+    expect(result.contract?.sprints[0]?.tickets).toHaveLength(0);
+  });
+
+  test("uses epic-relative posix paths and sprint attribution in findings", () => {
+    const epicMissing = loadContract(fx("no-epic"));
+    expect(epicMissing.findings[0]?.file).toBe("epic.yaml");
+
+    const manifestMissing = loadContract(fx("missing-manifest"));
+    const finding = manifestMissing.findings.find((f) => f.code === "MANIFEST_FILE_MISSING");
+    expect(finding?.file).toBe("sprint-05-foundation/manifest.yaml");
+    expect(finding?.sprint).toBe("sprint-05-foundation");
+  });
 });
