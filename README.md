@@ -1,11 +1,12 @@
-# Forge Core
+# ForgeGate
 
-Deterministic core for agent-driven epic execution. **CLI-first and runtime-agnostic** — it runs
-from a plain terminal and is consumed by Claude Code command wrappers, never the other way around.
-
-Forge is a **deterministic, human-gated orchestration layer for Claude Code** — it structures one
+**ForgeGate** is a deterministic, human-gated orchestration layer for Claude Code — it structures one
 ticket of agent work, enforces path fences and verification, and stops at the commit gate. It is **not**
 a fully autonomous engineering system, and v1 makes no claim to be.
+
+**Forge Core** is the deterministic CLI engine underneath: **CLI-first and runtime-agnostic**, it runs
+from a plain terminal and is consumed by Claude Code command wrappers, never the other way around.
+(The package is `forge-core` and the binary is `forge`.)
 
 > Design spec: `../apitest/docs/superpowers/specs/2026-05-23-agent-epic-pipeline-design.md`
 
