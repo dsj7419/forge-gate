@@ -98,7 +98,24 @@ via the packaged flow. 5. Only then consider journal/status/local-commit options
 
 **Not in this increment:** local commit, status write-back, journal append, hooks, multi-ticket loop.
 
-## Open decisions for Dan
-1. Artifacts: gitignored `.forge/` set (recommended) vs zero files (session-only)?
-2. Lock file in v1: include `.forge/lock.json` (recommended) or skip until multi-run is real?
-3. On failed run: leave branch for inspection (recommended) vs auto-rollback-to-checkpoint?
+## Resolved decisions (Dan)
+
+**Artifacts — gitignored `.forge/` set only.** v1 may write `.forge/active-ticket.json`, `.forge/lock.json`,
+`.forge/run-report.json` — operational state, never tracked, never committed. No tracked file is written
+except the engineer's `allowed_paths` edits. Never write `manifest.yaml`, ticket front-matter, `JOURNAL.md`,
+`DECISIONS.md`, or governance docs. **If `.forge/` is not gitignored, stop and escalate before writing.**
+
+**Lock — include `.forge/lock.json`.** Preflight: create it if absent (before branch/dispatch); if present →
+`LOCK_EXISTS`, stop, never silently overwrite. Contents: `{session_id, command, epic_path, ticket, branch,
+repo_root, pid, started_at}`. Stale detection via `pid` + `started_at`: report stale + show an explicit
+recovery command, but never auto-delete silently. Release the lock on normal commit-gate stop and on
+controlled ESCALATE (**after** writing `run-report.json`); on crash the lock remains and requires explicit
+recovery. `LOCK_EXISTS` ⇒ no branch creation, no dispatch, no mutation.
+
+**Failed run (ESCALATE / cap-reached / unresolved scope violation / invalid output / uncorrectable verify) —
+preserve evidence; human decides.** The orchestrator: stops; writes `run-report.json`; releases the lock;
+produces a **recovery brief** (failure code, PM/verifier decision, changed files, checkpoint HEAD, branch,
+commands run, verify results, scope findings, **suggested** cleanup/rollback commands); **leaves the branch +
+working tree intact**; asks the human. Recovery commands are *shown, not executed*. The only thing auto-cleaned
+is the gitignored lock (released after the report). Implementation/test files, branch, and diffs stay for the
+human. Rule: **failed live run preserves evidence; human decides rollback/discard.**
