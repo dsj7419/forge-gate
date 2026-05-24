@@ -1,4 +1,5 @@
 import type { ImportPlan } from "../importer/import-findings.js";
+import type { ImportResult } from "../importer/write.js";
 import type { ValidationFinding, ValidationReport } from "../validate/findings.js";
 import type { LoadedContract } from "../validate/load.js";
 
@@ -52,6 +53,35 @@ export function formatImportPlanHuman(plan: ImportPlan): string {
       return `  [${finding.severity}] ${finding.code}  ${finding.message}${where}`;
     }),
   ];
+  return lines.join("\n");
+}
+
+export function formatImportResultHuman(result: ImportResult): string {
+  if (!result.wrote) {
+    const reason = result.importFindings.find((finding) => finding.severity === "error")?.message ?? "import did not run";
+    return `Forge import: NOT WRITTEN — ${reason}`;
+  }
+
+  const lines = [
+    `Forge import (live): wrote ${result.createdFiles.length} files`,
+    `Generated contract: ${result.generatedContractValid ? "VALID" : "NOT EXECUTION-READY"}`,
+  ];
+  if (!result.generatedContractValid) {
+    lines.push(
+      "Import wrote canonical files successfully, but the generated contract requires human completion before execution.",
+    );
+  }
+  lines.push(`Import findings (${result.importFindings.length}):`);
+  lines.push(...result.importFindings.map((finding) => `  [${finding.severity}] ${finding.code}  ${finding.message}`));
+  if (result.validation) {
+    lines.push(`Validation: ${result.validation.ok ? "OK" : "FAILED"} (${result.validation.findings.length} findings)`);
+    lines.push(
+      ...result.validation.findings.map((finding) => {
+        const where = finding.file !== undefined ? ` (${finding.file})` : "";
+        return `  [${finding.severity}] ${finding.code}  ${finding.message}${where}`;
+      }),
+    );
+  }
   return lines.join("\n");
 }
 

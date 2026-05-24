@@ -1,10 +1,11 @@
 import { planImport } from "../importer/plan.js";
+import { executeImport } from "../importer/write.js";
 import { buildReport, type ValidationReport } from "../validate/findings.js";
 import { validateIntegrity } from "../validate/integrity.js";
 import { loadContract } from "../validate/load.js";
 import { validateReadiness } from "../validate/readiness.js";
 import { validateContract } from "../validate/validate-contract.js";
-import { formatImportPlanHuman, formatReportHuman, formatStatusHuman } from "./format.js";
+import { formatImportPlanHuman, formatImportResultHuman, formatReportHuman, formatStatusHuman } from "./format.js";
 
 /** IO boundary so the runner is fully testable without touching stdout or disk. */
 export type CliIo = {
@@ -60,13 +61,17 @@ function runImport(args: string[], io: CliIo): number {
   if (fromExisting === undefined || out === undefined) {
     return usageError(io, "import requires --from-existing <legacy-sprint-path> --out <epic-root>");
   }
-  if (!args.includes("--dry-run")) {
-    return usageError(io, "live import is not implemented yet; pass --dry-run");
+  const asJson = args.includes("--json");
+
+  if (args.includes("--dry-run")) {
+    const plan = planImport(fromExisting, out, { dryRun: true });
+    io.print(asJson ? JSON.stringify(plan, null, 2) : formatImportPlanHuman(plan));
+    return plan.ok ? 0 : 1;
   }
 
-  const plan = planImport(fromExisting, out, { dryRun: true });
-  io.print(args.includes("--json") ? JSON.stringify(plan, null, 2) : formatImportPlanHuman(plan));
-  return plan.ok ? 0 : 1;
+  const result = executeImport(fromExisting, out);
+  io.print(asJson ? JSON.stringify(result, null, 2) : formatImportResultHuman(result));
+  return result.ok ? 0 : 1;
 }
 
 function isUsablePath(epicPath: string | undefined): epicPath is string {

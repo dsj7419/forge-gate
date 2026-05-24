@@ -1,10 +1,23 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 
 import type { ValidationReport } from "../validate/findings.js";
 import { runCli, type CliIo } from "./run.js";
+
+const cliTempDirs: string[] = [];
+afterEach(() => {
+  for (const dir of cliTempDirs.splice(0)) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // best-effort cleanup
+    }
+  }
+});
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "validate", "__fixtures__");
 const fx = (name: string): string => path.join(fixturesDir, name);
@@ -160,12 +173,16 @@ describe("runCli import (dry-run)", () => {
     expect(artifacts).toHaveLength(0);
   });
 
-  test("refuses live import (no --dry-run) with exit 2 for v1", () => {
-    const { io, err } = fakeIo();
-    const code = runCli(["import", "--from-existing", legacyFixture, "--out", "/virtual/docs/epics/demo"], io);
+  test("live import (no --dry-run) writes a contract and exits non-zero when it is not execution-ready", () => {
+    const { io, out } = fakeIo();
+    const outDir = path.join(os.tmpdir(), `forge-cli-import-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    cliTempDirs.push(outDir);
 
-    expect(code).toBe(2);
-    expect(err.join("\n")).toMatch(/dry-run/i);
+    const code = runCli(["import", "--from-existing", legacyFixture, "--out", outDir], io);
+
+    expect(fs.existsSync(path.join(outDir, "epic.yaml"))).toBe(true);
+    expect(code).toBe(1); // T02 has ambiguous fields, so the generated contract is not execution-ready
+    expect(out.join("\n")).toMatch(/requires human completion/i);
   });
 
   test("requires --from-existing and --out (exit 2)", () => {

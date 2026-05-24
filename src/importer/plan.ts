@@ -3,7 +3,6 @@ import * as path from "node:path";
 import { BlastRadiusEnum, ChangeClassEnum, RiskEnum } from "../schema/enums.js";
 import {
   ImportCode,
-  type ImportCodeValue,
   type ImportFileAction,
   type ImportFinding,
   type ImportPlan,
@@ -16,6 +15,49 @@ import { scanLegacySprint, type ScannedFile } from "./scan.js";
 type EnumSchema = { safeParse: (value: unknown) => { success: boolean } };
 
 export type PlanImportOptions = { dryRun: boolean };
+
+/** A legacy ticket's derived canonical fields. Ambiguous fields are `undefined` (never invented). */
+export type DerivedTicket = {
+  basename: string;
+  sourceFile: string;
+  id: string;
+  idAmbiguous: boolean;
+  title: string;
+  kind: string | undefined;
+  risk: string | undefined;
+  change_class: string | undefined;
+  blast_radius: string | undefined;
+  hasAcceptance: boolean;
+  body: string;
+};
+
+export function deriveEpicId(outPath: string): string {
+  return path.basename(outPath) || "imported-epic";
+}
+
+export function deriveSprintId(sourcePath: string): string {
+  const num = /sprint-(\d+)/i.exec(path.basename(sourcePath))?.[1];
+  const padded = num ? num.padStart(2, "0") : "01";
+  return `sprint-${padded}-imported`;
+}
+
+export function deriveTicket(file: ScannedFile): DerivedTicket {
+  const prefix = /^(T\d+)/i.exec(file.basename)?.[1];
+  const canonicalId = prefix !== undefined && /^T\d{2,}$/.test(prefix);
+  return {
+    basename: file.basename,
+    sourceFile: file.file,
+    id: canonicalId ? prefix : (prefix ?? "T??"),
+    idAmbiguous: !canonicalId,
+    title: deriveTitle(file.text, file.basename),
+    kind: inferKind(file.basename),
+    risk: readField(file.text, "risk", RiskEnum),
+    change_class: readField(file.text, "change_class", ChangeClassEnum),
+    blast_radius: readField(file.text, "blast_radius", BlastRadiusEnum),
+    hasAcceptance: hasAcceptanceSection(file.text),
+    body: file.text,
+  };
+}
 
 /**
  * Produce a structured plan for importing a legacy sprint folder into the
@@ -37,7 +79,7 @@ export function planImport(sourcePath: string, outPath: string, options: PlanImp
   }
 
   const action: ImportFileAction = options.dryRun ? "would_create" : "create";
-  const epicId = path.basename(outPath) || "imported-epic";
+  const epicId = deriveEpicId(outPath);
   const sprintId = deriveSprintId(sourcePath);
 
   files.push({ targetFile: "epic.yaml", action, sourceFiles: [], contentPreview: `id: ${epicId}\nsprints: [${sprintId}]` });
@@ -69,9 +111,10 @@ export function planImport(sourcePath: string, outPath: string, options: PlanImp
   }
 
   for (const ticket of scan.files.filter((file) => file.kind === "ticket")) {
-    const planned = planTicket(ticket, sprintId, action);
-    files.push(planned.file);
-    findings.push(...planned.findings);
+    const derived = deriveTicket(ticket);
+    const targetFile = `${sprintId}/tickets/${ticket.basename}`;
+    files.push({ targetFile, action, sourceFiles: [ticket.file] });
+    findings.push(...ticketFindings(derived, targetFile));
   }
 
   for (const unknown of scan.files.filter((file) => file.kind === "unknown")) {
@@ -89,62 +132,30 @@ export function planImport(sourcePath: string, outPath: string, options: PlanImp
   return { ok: importPlanOk(findings), sourcePath, outPath, dryRun: options.dryRun, files, findings };
 }
 
-function deriveSprintId(sourcePath: string): string {
-  const base = path.basename(sourcePath);
-  const num = /sprint-(\d+)/i.exec(base)?.[1];
-  const padded = num ? num.padStart(2, "0") : "01";
-  return `sprint-${padded}-imported`;
-}
-
-function planTicket(
-  ticket: ScannedFile,
-  sprintId: string,
-  action: ImportFileAction,
-): { file: ImportPlanFile; findings: ImportFinding[] } {
+/** Findings for one derived ticket, shared by dry-run and live import. */
+export function ticketFindings(derived: DerivedTicket, targetFile: string): ImportFinding[] {
+  const at = { sourceFile: derived.sourceFile, targetFile };
   const findings: ImportFinding[] = [];
-  const targetFile = `${sprintId}/tickets/${ticket.basename}`;
-
-  const prefix = /^(T\d+)/i.exec(ticket.basename)?.[1];
-  const ticketId = prefix && /^T\d{2,}$/.test(prefix) ? prefix : (prefix ?? "T??");
-  if (!prefix || !/^T\d{2,}$/.test(prefix)) {
-    findings.push(
-      importFinding("warning", ImportCode.IMPORT_AMBIGUOUS_TICKET_ID, `could not derive a canonical ticket id from filename ${ticket.basename}`, {
-        sourceFile: ticket.file,
-        targetFile,
-      }),
-    );
+  if (derived.idAmbiguous) {
+    findings.push(importFinding("warning", ImportCode.IMPORT_AMBIGUOUS_TICKET_ID, `could not derive a canonical ticket id from filename ${derived.basename}`, at));
   }
-
-  if (inferKind(ticket.basename) === undefined) {
-    findings.push(
-      importFinding("warning", ImportCode.IMPORT_AMBIGUOUS_TICKET_KIND, `ticket ${ticketId}: kind could not be inferred from the filename`, {
-        sourceFile: ticket.file,
-        targetFile,
-      }),
-    );
+  if (derived.kind === undefined) {
+    findings.push(importFinding("warning", ImportCode.IMPORT_AMBIGUOUS_TICKET_KIND, `ticket ${derived.id}: kind could not be inferred from the filename`, at));
   }
-
-  checkField(ticket, "risk", RiskEnum, ImportCode.IMPORT_AMBIGUOUS_RISK, ticketId, targetFile, findings);
-  checkField(ticket, "change_class", ChangeClassEnum, ImportCode.IMPORT_AMBIGUOUS_CHANGE_CLASS, ticketId, targetFile, findings);
-  checkField(ticket, "blast_radius", BlastRadiusEnum, ImportCode.IMPORT_AMBIGUOUS_BLAST_RADIUS, ticketId, targetFile, findings);
-
-  if (!hasAcceptanceSection(ticket.text)) {
-    findings.push(
-      importFinding("warning", ImportCode.IMPORT_MISSING_ACCEPTANCE_CRITERIA, `ticket ${ticketId}: no Acceptance Criteria section found in legacy content`, {
-        sourceFile: ticket.file,
-        targetFile,
-      }),
-    );
+  if (derived.risk === undefined) {
+    findings.push(importFinding("warning", ImportCode.IMPORT_AMBIGUOUS_RISK, `ticket ${derived.id}: risk is ambiguous and needs a human decision`, at));
   }
-
-  findings.push(
-    importFinding("info", ImportCode.IMPORT_PROSE_PRESERVED, `ticket ${ticketId}: legacy prose preserved from ${ticket.file}`, {
-      sourceFile: ticket.file,
-      targetFile,
-    }),
-  );
-
-  return { file: { targetFile, action, sourceFiles: [ticket.file] }, findings };
+  if (derived.change_class === undefined) {
+    findings.push(importFinding("warning", ImportCode.IMPORT_AMBIGUOUS_CHANGE_CLASS, `ticket ${derived.id}: change_class is ambiguous and needs a human decision`, at));
+  }
+  if (derived.blast_radius === undefined) {
+    findings.push(importFinding("warning", ImportCode.IMPORT_AMBIGUOUS_BLAST_RADIUS, `ticket ${derived.id}: blast_radius is ambiguous and needs a human decision`, at));
+  }
+  if (!derived.hasAcceptance) {
+    findings.push(importFinding("warning", ImportCode.IMPORT_MISSING_ACCEPTANCE_CRITERIA, `ticket ${derived.id}: no Acceptance Criteria section found in legacy content`, at));
+  }
+  findings.push(importFinding("info", ImportCode.IMPORT_PROSE_PRESERVED, `ticket ${derived.id}: legacy prose preserved from ${derived.basename}`, at));
+  return findings;
 }
 
 function inferKind(basename: string): string | undefined {
@@ -156,25 +167,14 @@ function inferKind(basename: string): string | undefined {
   return undefined;
 }
 
-function checkField(
-  ticket: ScannedFile,
-  key: string,
-  schema: EnumSchema,
-  code: ImportCodeValue,
-  ticketId: string,
-  targetFile: string,
-  findings: ImportFinding[],
-): void {
-  const match = new RegExp(`^\\s*${key}\\s*:\\s*(\\S+)`, "im").exec(ticket.text);
-  const value = match?.[1];
-  if (value === undefined || !schema.safeParse(value).success) {
-    findings.push(
-      importFinding("warning", code, `ticket ${ticketId}: ${key} is ambiguous and needs a human decision`, {
-        sourceFile: ticket.file,
-        targetFile,
-      }),
-    );
-  }
+function deriveTitle(text: string, basename: string): string {
+  const heading = /^#\s+(.+)$/m.exec(text)?.[1];
+  return (heading ?? basename).trim();
+}
+
+function readField(text: string, key: string, schema: EnumSchema): string | undefined {
+  const value = new RegExp(`^\\s*${key}\\s*:\\s*(\\S+)`, "im").exec(text)?.[1];
+  return value !== undefined && schema.safeParse(value).success ? value : undefined;
 }
 
 function hasAcceptanceSection(text: string): boolean {
