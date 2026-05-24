@@ -33,7 +33,8 @@ if (process.env.FORGE_BIN) {
 } else if (onPath("forge")) {
   exitCode = run("forge", args);
 } else {
-  exitCode = run("pnpm", ["-C", repoRoot, "forge", ...args]);
+  // `-s` (silent) suppresses pnpm's lifecycle preamble so JSON subcommands emit clean stdout.
+  exitCode = run("pnpm", ["-s", "-C", repoRoot, "forge", ...args]);
 }
 
 process.exit(exitCode);
