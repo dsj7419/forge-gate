@@ -1,0 +1,8 @@
+schema_version: 1
+id: example-epic
+title: Example Epic (starter template — adapt me)
+sprints:
+  - sprint-01-foundation
+gate_policy:
+  default_push: human
+  default_merge: human
