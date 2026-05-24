@@ -74,6 +74,52 @@ describe("runCli validate", () => {
     expect(code).toBe(2);
     expect(err.join("\n")).toMatch(/usage/i);
   });
+
+  test("rejects an unknown flag with usage (exit 2)", () => {
+    const { io, err, artifacts } = fakeIo();
+    const code = runCli(["validate", fx("valid-epic"), "--wat"], io);
+
+    expect(code).toBe(2);
+    expect(err.join("\n")).toMatch(/usage/i);
+    expect(artifacts).toHaveLength(0);
+  });
+
+  test("treats a flag in the path position as a missing path (exit 2)", () => {
+    const { io } = fakeIo();
+    expect(runCli(["validate", "--json"], io)).toBe(2);
+  });
+
+  test("returns a controlled exit 1 when the artifact write fails", () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const io: CliIo = {
+      print: (text) => out.push(text),
+      printError: (text) => err.push(text),
+      writeArtifact: () => {
+        throw new Error("EROFS: read-only file system");
+      },
+    };
+    const code = runCli(["validate", fx("valid-epic")], io);
+
+    expect(code).toBe(1);
+    expect(out.join("\n")).toContain("OK"); // validation still ran and printed
+    expect(err.join("\n")).toMatch(/validation-report\.json failed/i);
+  });
+});
+
+describe("runCli status flag handling", () => {
+  test("rejects status --json for v1 (exit 2)", () => {
+    const { io, err } = fakeIo();
+    const code = runCli(["status", fx("valid-epic"), "--json"], io);
+
+    expect(code).toBe(2);
+    expect(err.join("\n")).toMatch(/usage/i);
+  });
+
+  test("rejects an unknown status flag (exit 2)", () => {
+    const { io } = fakeIo();
+    expect(runCli(["status", fx("valid-epic"), "--wat"], io)).toBe(2);
+  });
 });
 
 describe("runCli status", () => {
