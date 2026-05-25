@@ -89,10 +89,19 @@ cp -r /d/Projects/forge-gate/templates/epic-starter docs/epics/my-first-epic
 > Keep the first ticket **tiny, low-risk, and tightly fenced** (narrow `allowed_paths`, explicit
 > `forbidden_paths`, concrete `verify_commands`). No migrations, auth, secrets, or production config for a pilot.
 
+> **External-repo epic paths (read-only wrappers).** `/forge-run-ticket` resolves the target repo and
+> absolutizes the epic for you, so a relative path is fine there. The read-only wrappers below —
+> `/forge-validate`, `/forge-run-dry-run`, `/forge-status`, `/forge-import` — do **not** yet take `--repo-root`,
+> and under the pnpm-fallback CLI resolution the CLI's working directory can be your **ForgeGate checkout**, not
+> the target. **Robust default: pass an absolute epic path** to these. (Alternatively, install `forge` via
+> `FORGE_BIN` or `pnpm link --global` so the CLI inherits the target's cwd and relative paths resolve there.) A
+> small future follow-up may add target-repo/`--repo-root` handling to these wrappers; until then, absolute epic
+> paths are the safe external pattern.
+
 ## 7. Validate the contract
 
 ```bash
-/forge-validate docs/epics/my-first-epic
+/forge-validate /abs/path/to/your-repo/docs/epics/my-first-epic   # absolute path (see note above)
 ```
 
 Fix any findings until it reports `OK`. A contract with `TODO` placeholders (from import) is a human-completion
@@ -101,7 +110,7 @@ draft and will intentionally fail until you complete it.
 ## 8. Dry-run (read-only preview)
 
 ```bash
-/forge-run-dry-run docs/epics/my-first-epic
+/forge-run-dry-run /abs/path/to/your-repo/docs/epics/my-first-epic   # absolute path (see note above)
 ```
 
 Confirm it selects the ticket you intend, with the right paths, verify commands, and gate. Nothing changes.

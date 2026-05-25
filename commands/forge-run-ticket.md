@@ -14,8 +14,15 @@ the source of truth.
   `TARGET_REPO="$(git rev-parse --show-toplevel)"`. **Every** target git/verify operation uses `git -C "$TARGET_REPO"`,
   and **every** Forge Core call that pins a repo root is passed `--repo-root "$TARGET_REPO"`. For ForgeGate
   self-runs the two coincide; for any other project they differ — **never** use `$FORGE_REPO` as the target.
-- **`EPIC`** = the `$ARGUMENTS` epic path resolved to an **absolute** path (if relative, under `$TARGET_REPO`),
-  so Forge Core loads it regardless of the CLI's working directory.
+- **`EPIC`** = the epic path **pinned to absolute** (do **not** leave this to inference) and **CLI-consumable**,
+  so Forge Core loads it regardless of the CLI's working directory. Keep an already-absolute `$ARGUMENTS`;
+  otherwise join it under `$TARGET_REPO` (which `git rev-parse --show-toplevel` returns as a CLI-safe `D:/…`-style
+  path):
+  ```bash
+  EPIC="$ARGUMENTS"; case "$EPIC" in /*|[A-Za-z]:[\\/]*) ;; *) EPIC="$TARGET_REPO/$EPIC" ;; esac
+  ```
+  Do **not** use `realpath` here — on Git Bash it yields an MSYS `/tmp`-style path the Windows CLI can misread.
+  Every later `$FORGE … "$EPIC"` call must receive this absolute path.
 
 ## Hard constraints (v1 — never violate)
 No commit, push, PR, merge. No status write-back. No journal write. No edits to manifest/ticket/governance/
