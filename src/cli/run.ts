@@ -35,12 +35,12 @@ const USAGE =
   "       forge status <epic-path>\n" +
   "       forge run <epic-path> --dry-run [--json]\n" +
   "       forge import --from-existing <legacy-sprint-path> --out <epic-root> [--dry-run] [--json]\n" +
-  "       forge packets <epic-path>\n" +
-  "       forge dispatch <engineer|semantic-verifier|scope-verifier|pm> <epic-path>\n" +
-  "       forge dispatch pm <epic-path> --engineer-output <f> --semantic-output <f> --scope-output <f> --facts <f.json>\n" +
+  "       forge packets <epic-path> [--repo-root <path>]\n" +
+  "       forge dispatch <engineer|semantic-verifier|scope-verifier|pm> <epic-path> [--repo-root <path>]\n" +
+  "       forge dispatch pm <epic-path> --engineer-output <f> --semantic-output <f> --scope-output <f> --facts <f.json> [--repo-root <path>]\n" +
   "       forge parse-agent <role> (--file <path> | --stdin)\n" +
-  "       forge active-ticket <epic-path> [--json]\n" +
-  "       forge guard paths [--active <active-ticket.json>] [--json]";
+  "       forge active-ticket <epic-path> [--json] [--repo-root <path>]\n" +
+  "       forge guard paths [--active <active-ticket.json>] [--json] [--repo-root <path>]";
 
 export function runCli(argv: string[], io: CliIo): number {
   const [command, epicPath, ...flags] = argv;
@@ -64,7 +64,9 @@ export function runCli(argv: string[], io: CliIo): number {
 
   if (command === "packets") {
     if (!isUsablePath(epicPath)) return usageError(io);
-    const result = generateRunPackets(epicPath, process.cwd());
+    const unknown = flags.filter((flag) => flag.startsWith("--") && flag !== "--repo-root");
+    if (unknown.length > 0) return usageError(io, `unknown option(s): ${unknown.join(", ")}`);
+    const result = generateRunPackets(epicPath, flagValue(flags, "--repo-root") ?? process.cwd());
     if (!result.ok) {
       io.print(JSON.stringify({ ok: false, blockedReasons: result.blockedReasons }, null, 2));
       return 1;
@@ -97,7 +99,7 @@ export function runCli(argv: string[], io: CliIo): number {
       return usageError(io, "dispatch pm input assembly requires --engineer-output, --semantic-output, --scope-output, and --facts");
     }
 
-    const result = generateRunPackets(dispatchEpic, process.cwd());
+    const result = generateRunPackets(dispatchEpic, flagValue(rest, "--repo-root") ?? process.cwd());
     if (!result.ok) {
       io.print(JSON.stringify({ ok: false, blockedReasons: result.blockedReasons }, null, 2));
       return 1;
@@ -134,9 +136,9 @@ export function runCli(argv: string[], io: CliIo): number {
 
   if (command === "active-ticket") {
     if (!isUsablePath(epicPath)) return usageError(io);
-    const unknown = flags.filter((flag) => flag !== "--json");
+    const unknown = flags.filter((flag) => flag.startsWith("--") && flag !== "--json" && flag !== "--repo-root");
     if (unknown.length > 0) return usageError(io, `unknown option(s): ${unknown.join(", ")}`);
-    const result = emitActiveTicket(epicPath, process.cwd());
+    const result = emitActiveTicket(epicPath, flagValue(flags, "--repo-root") ?? process.cwd());
     if (!result.ok) {
       io.print(JSON.stringify({ ok: false, blockedReasons: result.blockedReasons }, null, 2));
       return 1;
@@ -184,7 +186,7 @@ export function runCli(argv: string[], io: CliIo): number {
 }
 
 const IMPORT_FLAGS = new Set(["--from-existing", "--out", "--dry-run", "--json"]);
-const DISPATCH_FLAGS = new Set(["--engineer-output", "--semantic-output", "--scope-output", "--facts", "--json"]);
+const DISPATCH_FLAGS = new Set(["--engineer-output", "--semantic-output", "--scope-output", "--facts", "--json", "--repo-root"]);
 
 function flagValue(args: string[], flag: string): string | undefined {
   const index = args.indexOf(flag);

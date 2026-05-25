@@ -8,8 +8,8 @@ import { evaluateFence, repoRootsMatch, type GuardResult } from "./path-guard.js
 
 const DEFAULT_ACTIVE_PATH = ".forge/active-ticket.json";
 const NOT_A_GIT_REPO = "(not a git repository)";
-const GUARD_FLAGS = new Set(["--active", "--json"]);
-const GUARD_USAGE = "usage: forge guard paths [--active <active-ticket.json>] [--json]";
+const GUARD_FLAGS = new Set(["--active", "--json", "--repo-root"]);
+const GUARD_USAGE = "usage: forge guard paths [--active <active-ticket.json>] [--json] [--repo-root <path>]";
 
 /** Side-effectful boundary so the guard command is fully testable without git or disk. */
 export type GuardEnv = {
@@ -49,7 +49,9 @@ export function runGuardPaths(args: string[], io: CliIo, env: GuardEnv = default
   }
 
   const fence = fenceOf(loaded.ticket);
-  const observedRoot = env.resolveRepoRoot(process.cwd());
+  const repoRootArg = flagValue(flags, "--repo-root");
+  const baseDir = repoRootArg !== undefined ? path.resolve(repoRootArg) : process.cwd();
+  const observedRoot = env.resolveRepoRoot(baseDir);
   const inRightRepo = observedRoot !== null && repoRootsMatch(observedRoot, fence.repo_root);
   const changedFiles = inRightRepo ? env.readChangedFiles(observedRoot) : [];
   const result = evaluateFence({ fence, changedFiles, observedRepoRoot: observedRoot ?? NOT_A_GIT_REPO });

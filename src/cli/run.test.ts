@@ -441,6 +441,45 @@ describe("runCli active-ticket (deterministic forge-active-ticket/v1 emitter)", 
   });
 });
 
+describe("runCli --repo-root (target-repo separation)", () => {
+  const target = path.resolve(os.tmpdir(), "forge-target-fixture");
+
+  test("packets --repo-root pins repo_root to the target, not cwd", () => {
+    const { io, out } = fakeIo();
+    const code = runCli(["packets", sandboxEpicPath, "--repo-root", target], io);
+
+    expect(code).toBe(0);
+    const p = JSON.parse(out.join("\n")) as { active_run: { repo_root: string }; engineer: { repo_root: string } };
+    expect(p.active_run.repo_root).toBe(target);
+    expect(p.engineer.repo_root).toBe(target);
+  });
+
+  test("packets defaults repo_root to cwd when --repo-root is omitted (backward-compatible)", () => {
+    const { io, out } = fakeIo();
+    runCli(["packets", sandboxEpicPath], io);
+
+    expect(JSON.parse(out.join("\n")).active_run.repo_root).toBe(path.resolve(process.cwd()));
+  });
+
+  test("dispatch --repo-root embeds the target repo root in the spec", () => {
+    const { io, out } = fakeIo();
+    const code = runCli(["dispatch", "engineer", sandboxEpicPath, "--repo-root", target], io);
+
+    expect(code).toBe(0);
+    // Parse first so the prompt string carries real path separators (not JSON-escaped backslashes).
+    const spec = JSON.parse(out.join("\n")) as { prompt: string };
+    expect(spec.prompt).toContain(`repo_root: ${target}`);
+  });
+
+  test("active-ticket --repo-root emits repo_root === target, not cwd", () => {
+    const { io, out } = fakeIo();
+    const code = runCli(["active-ticket", sandboxEpicPath, "--repo-root", target], io);
+
+    expect(code).toBe(0);
+    expect(JSON.parse(out.join("\n")).repo_root).toBe(target);
+  });
+});
+
 describe("runGuardPaths (path-fence guard)", () => {
   const activeTicket = {
     schema: "forge-active-ticket/v1",
@@ -566,6 +605,23 @@ describe("runGuardPaths (path-fence guard)", () => {
     }));
 
     expect(seen).toContain("custom");
+  });
+
+  test("--repo-root makes the guard observe the given target repo instead of cwd", () => {
+    let seenBase = "";
+    const target = path.resolve(os.tmpdir(), "forge-guard-target");
+    const { io } = fakeIo();
+    const code = runGuardPaths(["paths", "--repo-root", target], io, guardEnv({
+      resolveRepoRoot: (dir) => {
+        seenBase = dir;
+        return target;
+      },
+      readChangedFiles: () => ["src/example/a.ts"],
+      readActiveTicket: () => JSON.stringify({ ...activeTicket, repo_root: target }),
+    }));
+
+    expect(seenBase).toBe(target);
+    expect(code).toBe(0); // observed root matches the active ticket's repo_root; allowed change → clean
   });
 
   test("rejects an unknown flag with usage (exit 2) before touching git or the active ticket", () => {
