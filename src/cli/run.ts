@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { parseAgentOutput, type AgentRole } from "../agents/parse-output.js";
+import { runGuardPaths } from "../guard/cli.js";
 import { planImport } from "../importer/plan.js";
 import { executeImport } from "../importer/write.js";
 import { buildAgentDispatch, buildPmDispatch, type PmRawInputs } from "../orchestrator/dispatch.js";
@@ -36,7 +37,8 @@ const USAGE =
   "       forge packets <epic-path>\n" +
   "       forge dispatch <engineer|semantic-verifier|scope-verifier|pm> <epic-path>\n" +
   "       forge dispatch pm <epic-path> --engineer-output <f> --semantic-output <f> --scope-output <f> --facts <f.json>\n" +
-  "       forge parse-agent <role> (--file <path> | --stdin)";
+  "       forge parse-agent <role> (--file <path> | --stdin)\n" +
+  "       forge guard paths [--active <active-ticket.json>] [--json]";
 
 export function runCli(argv: string[], io: CliIo): number {
   const [command, epicPath, ...flags] = argv;
@@ -126,6 +128,10 @@ export function runCli(argv: string[], io: CliIo): number {
     const dispatch = buildAgentDispatch(role, result.packets, options);
     io.print(JSON.stringify(dispatch, null, 2));
     return 0;
+  }
+
+  if (command === "guard") {
+    return runGuardPaths(argv.slice(1), io);
   }
 
   if (command === "parse-agent") {

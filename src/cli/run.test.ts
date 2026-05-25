@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
 
 import type { ValidationReport } from "../validate/findings.js";
+import { runGuardPaths, type GuardEnv } from "../guard/cli.js";
 import { runCli, type CliIo } from "./run.js";
 
 const cliTempDirs: string[] = [];
@@ -384,5 +385,159 @@ describe("runCli dispatch pm — deterministic input assembly", () => {
     const code = runCli(["dispatch", "pm", sandboxEpicPath], io);
     expect(code).toBe(0);
     expect(out.join("\n")).not.toContain("## Inputs (each validated");
+  });
+});
+
+describe("runGuardPaths (path-fence guard)", () => {
+  const activeTicket = {
+    schema: "forge-active-ticket/v1",
+    repo_root: "/repo",
+    epic_path: "docs/epics/x",
+    ticket: "T01",
+    branch: "forge/x/T01",
+    allowed_paths: ["src/example/**"],
+    forbidden_paths: ["package.json"],
+    protected_paths: ["**/manifest.yaml"],
+  };
+
+  function guardEnv(over: Partial<GuardEnv> = {}): GuardEnv {
+    return {
+      resolveRepoRoot: () => "/repo",
+      readChangedFiles: () => [],
+      readActiveTicket: () => JSON.stringify(activeTicket),
+      ...over,
+    };
+  }
+
+  function enoent(): never {
+    const error = new Error("ENOENT: no such file") as NodeJS.ErrnoException;
+    error.code = "ENOENT";
+    throw error;
+  }
+
+  test("a clean change inside allowed_paths exits 0 and writes nothing", () => {
+    const { io, out, artifacts } = fakeIo();
+    const code = runGuardPaths(["paths"], io, guardEnv({ readChangedFiles: () => ["src/example/a.ts"] }));
+
+    expect(code).toBe(0);
+    expect(artifacts).toHaveLength(0);
+    expect(out.join("\n")).toMatch(/OK|clean/i);
+  });
+
+  test("a change outside allowed_paths exits 1 with PATH_OUTSIDE_ALLOWED", () => {
+    const { io, out } = fakeIo();
+    const code = runGuardPaths(["paths"], io, guardEnv({ readChangedFiles: () => ["src/stray.ts"] }));
+
+    expect(code).toBe(1);
+    expect(out.join("\n")).toContain("PATH_OUTSIDE_ALLOWED");
+  });
+
+  test("a forbidden-path change exits 1 with FORBIDDEN_PATH_TOUCHED", () => {
+    const { io, out } = fakeIo();
+    const code = runGuardPaths(["paths"], io, guardEnv({ readChangedFiles: () => ["package.json"] }));
+
+    expect(code).toBe(1);
+    expect(out.join("\n")).toContain("FORBIDDEN_PATH_TOUCHED");
+  });
+
+  test("a protected-path change exits 1 with PROTECTED_PATH_TOUCHED", () => {
+    const { io, out } = fakeIo();
+    const code = runGuardPaths(["paths"], io, guardEnv({ readChangedFiles: () => ["docs/epics/x/manifest.yaml"] }));
+
+    expect(code).toBe(1);
+    expect(out.join("\n")).toContain("PROTECTED_PATH_TOUCHED");
+  });
+
+  test("multiple violations across files are reported together (exit 1)", () => {
+    const { io, out } = fakeIo();
+    const code = runGuardPaths(["paths"], io, guardEnv({ readChangedFiles: () => ["src/stray.ts", "package.json"] }));
+
+    expect(code).toBe(1);
+    expect(out.join("\n")).toContain("PATH_OUTSIDE_ALLOWED");
+    expect(out.join("\n")).toContain("FORBIDDEN_PATH_TOUCHED");
+  });
+
+  test("a missing active-ticket file exits 1 with ACTIVE_TICKET_MISSING and never reads git", () => {
+    const { io, out } = fakeIo();
+    const code = runGuardPaths(["paths"], io, guardEnv({
+      readActiveTicket: enoent,
+      readChangedFiles: () => {
+        throw new Error("git must not run when the active ticket is unreadable");
+      },
+    }));
+
+    expect(code).toBe(1);
+    expect(out.join("\n")).toContain("ACTIVE_TICKET_MISSING");
+  });
+
+  test("a malformed active-ticket file exits 1 with ACTIVE_TICKET_INVALID", () => {
+    const { io, out } = fakeIo();
+    const code = runGuardPaths(["paths"], io, guardEnv({ readActiveTicket: () => "{ not json" }));
+
+    expect(code).toBe(1);
+    expect(out.join("\n")).toContain("ACTIVE_TICKET_INVALID");
+  });
+
+  test("a worktree root that differs from the active ticket exits 1 with REPO_ROOT_MISMATCH and never reads git", () => {
+    const { io, out } = fakeIo();
+    const code = runGuardPaths(["paths"], io, guardEnv({
+      resolveRepoRoot: () => "/some/other/repo",
+      readChangedFiles: () => {
+        throw new Error("git must not run on a repo_root mismatch");
+      },
+    }));
+
+    expect(code).toBe(1);
+    expect(out.join("\n")).toContain("REPO_ROOT_MISMATCH");
+  });
+
+  test("--json emits a machine-readable result", () => {
+    const { io, out } = fakeIo();
+    const code = runGuardPaths(["paths", "--json"], io, guardEnv({ readChangedFiles: () => ["src/example/a.ts"] }));
+
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out.join("\n")) as { ok: boolean; findings: unknown[] };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.findings).toEqual([]);
+  });
+
+  test("honors --active <path> when locating the active-ticket file", () => {
+    let seen = "";
+    const { io } = fakeIo();
+    runGuardPaths(["paths", "--active", "custom/.forge/active-ticket.json"], io, guardEnv({
+      readActiveTicket: (activePath) => {
+        seen = activePath;
+        return JSON.stringify(activeTicket);
+      },
+      readChangedFiles: () => ["src/example/a.ts"],
+    }));
+
+    expect(seen).toContain("custom");
+  });
+
+  test("rejects an unknown flag with usage (exit 2) before touching git or the active ticket", () => {
+    const { io, err } = fakeIo();
+    const code = runGuardPaths(["paths", "--wat"], io, guardEnv({
+      readActiveTicket: () => {
+        throw new Error("must not read the active ticket on a usage error");
+      },
+    }));
+
+    expect(code).toBe(2);
+    expect(err.join("\n")).toMatch(/guard|usage/i);
+  });
+
+  test("requires the `paths` subcommand (exit 2)", () => {
+    const { io } = fakeIo();
+    expect(runGuardPaths([], io, guardEnv())).toBe(2);
+    expect(runGuardPaths(["bogus"], io, guardEnv())).toBe(2);
+  });
+});
+
+describe("runCli guard routing", () => {
+  test("`guard` with no subcommand exits 2 with usage", () => {
+    const { io, err } = fakeIo();
+    expect(runCli(["guard"], io)).toBe(2);
+    expect(err.join("\n")).toMatch(/usage/i);
   });
 });
