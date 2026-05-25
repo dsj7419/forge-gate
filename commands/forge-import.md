@@ -16,6 +16,15 @@ node "${FORGE_REPO:?set FORGE_REPO to your forge-gate checkout}/scripts/run-forg
 The resolver picks the Forge CLI deterministically: `$FORGE_BIN` → `forge` on `PATH` → local-dev `pnpm`
 fallback. `FORGE_REPO` must point to your forge-gate checkout (or put `forge` on `PATH`).
 
+> **External repos:** unlike the single-epic read-only wrappers, `import` takes **two** path flags
+> (`--from-existing` and `--out`) rather than one epic argument, so it does **not** auto-resolve them against
+> the target repo. Under the resolver's pnpm fallback the CLI's working directory can be the ForgeGate
+> checkout, so for an external target repo **pass absolute paths** for both `--from-existing` and `--out`
+> (e.g. `--from-existing /abs/path/to/legacy-sprint --out /abs/path/to/your-repo/docs/epics/my-epic`).
+> `import` is a one-time setup/migration step, so this is acceptable for now; a future small follow-up may make
+> it target-aware in Core (a `--repo-root` base for its paths) — intentionally **not** done with brittle shell
+> flag-parsing in this wrapper.
+
 Then relay the outcome:
 - **Dry-run** (`--dry-run`): planned canonical target files + all ambiguity findings; nothing is written.
 - **Live**: which canonical files were written, whether the generated contract is execution-ready, and the
