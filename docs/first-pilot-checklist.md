@@ -7,6 +7,9 @@ it first. (See [`adopting-forgegate-in-a-project.md`](adopting-forgegate-in-a-pr
 
 - [ ] ForgeGate built (`pnpm build` in the ForgeGate repo) and its own tests/typecheck green.
 - [ ] `FORGE_REPO` is set to the ForgeGate checkout (or `forge` is on `PATH` / `FORGE_BIN` is set).
+- [ ] You understand `FORGE_REPO` (the ForgeGate **tool** checkout) is **separate** from the **target repo**
+      (the project open in Claude Code). `/forge-run-ticket` resolves the target from the current git root
+      (`git rev-parse --show-toplevel`), runs all git/verify there, and passes the CLI `--repo-root <target>`.
 - [ ] `pnpm install-commands` run; `/forge-validate`, `/forge-run-dry-run`, `/forge-run-ticket` available in Claude Code.
 
 ## Target repo state

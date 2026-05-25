@@ -20,10 +20,11 @@ pnpm build      # emits dist/ (the binary the wrappers run)
 pnpm test       # optional sanity: should be green
 ```
 
-## 2. Point ForgeGate at itself: `FORGE_REPO`
+## 2. Set `FORGE_REPO` — the ForgeGate checkout (distinct from your target repo)
 
-The slash-command wrappers locate the CLI via `FORGE_REPO`. **It is required** — set it to your ForgeGate
-checkout. Export it durably (e.g. add to `~/.bashrc`), not just for one shell:
+The slash-command wrappers use `FORGE_REPO` **only to locate the `forge` CLI** — it is **not** the project
+being modified. **It is required**; set it to your ForgeGate checkout and export it durably (e.g. add to
+`~/.bashrc`), not just for one shell:
 
 ```bash
 export FORGE_REPO=/d/Projects/forge-gate          # Git Bash
@@ -32,6 +33,13 @@ export FORGE_REPO=/d/Projects/forge-gate          # Git Bash
 
 Optional alternatives the resolver also accepts: set `FORGE_BIN` to pin a specific built binary, or
 `pnpm -C /d/Projects/forge-gate link --global` to put `forge` on your `PATH`.
+
+> **Tool repo vs. target repo (this is what makes ForgeGate work in *other* repos).** `FORGE_REPO` is the
+> ForgeGate checkout — the engine. The **target repo** — the project a ticket actually modifies — is whatever
+> repository you have open in Claude Code. `/forge-run-ticket` resolves the target automatically from the
+> current project's git root (`git rev-parse --show-toplevel`), runs all git/verify operations there, and
+> passes the CLI `--repo-root <target>` so packets/active-ticket/guard pin the target — never `FORGE_REPO`.
+> The two coincide only when ForgeGate operates on itself; for any other project they differ.
 
 ## 3. Install the slash commands + agent charters
 

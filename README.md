@@ -174,6 +174,12 @@ CLI in this order:
 `FORGE_REPO` is the path to your forge-gate checkout; **set it** (or `pnpm link --global` the CLI so
 `forge` is on `PATH`) so the wrappers can locate the CLI.
 
+**Tool repo vs. target repo.** `FORGE_REPO` only locates the CLI — it is **not** the project a ticket
+modifies. `/forge-run-ticket` resolves the **target repo** from the current Claude Code project's git root
+(`git rev-parse --show-toplevel`), runs all git/verify operations there, and passes Core `--repo-root <target>`
+(on `packets` / `dispatch` / `active-ticket` / `guard paths`) so the target is pinned regardless of where the
+CLI resolves from. The two coincide only for ForgeGate self-runs.
+
 ## Claude Code wrappers (convenience surface)
 
 **Forge Core (this CLI) is the source of truth.** The Claude Code slash commands are *thin* wrappers
