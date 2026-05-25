@@ -54,6 +54,15 @@ describe("parseActiveTicket", () => {
     expect(result.code).toBe(GuardCode.ACTIVE_TICKET_INVALID);
   });
 
+  test("rejects a relative repo_root — the wrong-cwd guard requires an absolute path", () => {
+    const result = parseActiveTicket(JSON.stringify({ ...valid, repo_root: "." }));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.code).toBe(GuardCode.ACTIVE_TICKET_INVALID);
+    expect(result.message).toMatch(/absolute/i);
+  });
+
   test("rejects a missing load-bearing field rather than silently accepting it", () => {
     const { repo_root: _omitted, ...withoutRepoRoot } = valid;
 

@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 
 import { z } from "zod";
 
@@ -18,7 +19,10 @@ export const ACTIVE_TICKET_SCHEMA = "forge-active-ticket/v1";
  */
 export const ActiveTicketSchema = z.object({
   schema: z.literal(ACTIVE_TICKET_SCHEMA),
-  repo_root: z.string().min(1),
+  // Must be absolute: the guard rejects wrong-cwd evidence by comparing the worktree
+  // root to this value. A relative repo_root would resolve against the guard's own
+  // cwd and silently defeat that check (ForgeGate's #1 durable lesson).
+  repo_root: z.string().min(1).refine((value) => path.isAbsolute(value), "repo_root must be an absolute path"),
   epic_path: z.string().min(1).optional(),
   ticket: z.string().min(1),
   branch: z.string().min(1).optional(),

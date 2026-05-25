@@ -59,6 +59,9 @@ The guard reads a small, gitignored JSON file the orchestration shell writes for
 
 - **Required:** `schema`, `repo_root`, `ticket`, `allowed_paths`, `forbidden_paths`, `protected_paths`.
   A missing required field fails loudly as `ACTIVE_TICKET_INVALID` — it is never silently defaulted.
+- **`repo_root` must be an absolute path.** The guard rejects wrong-cwd evidence by comparing the
+  worktree root to `repo_root`; a relative value (e.g. `.`) would resolve against the guard's own
+  working directory and silently defeat that check, so it is rejected as `ACTIVE_TICKET_INVALID`.
 - **Optional:** `epic_path`, `branch`.
 - **Extra fields are tolerated.** The run also records operational fields (e.g. `gate`, `phase`,
   `timestamp`); the guard ignores unknown keys so the file can carry more than the guard needs without
