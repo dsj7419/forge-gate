@@ -80,6 +80,20 @@ They are complementary: the guard is a cheap, fast tripwire that can run *before
 the agents; the scope verifier remains the semantic judge inside the loop. The guard does **not** replace
 the verifier's reasoning, and a clean guard result is not a substitute for review.
 
+## Integration with `/forge-run-ticket`
+
+The orchestration loop wires the guard at its scope-check step (it does **not** install any git hook):
+
+- **Producer (deterministic).** At its lock/checkpoint step the loop emits the active-ticket file from
+  Core — `forge active-ticket <epic> --json > <epic>/.forge/active-ticket.json` — rather than
+  hand-authoring the JSON. `forge active-ticket` reuses the same dry-run + packet selection as the run,
+  so the emitted fence always matches the ticket actually being executed, and the output is the validated
+  `forge-active-ticket/v1` shape.
+- **Consumer.** At the scope-check step the loop runs `forge guard paths --active <epic>/.forge/active-ticket.json`;
+  a non-zero result is treated as a scope failure → CORRECT/ESCALATE.
+- The deterministic guard **augments** the scope-verifier agent — the verifier still runs afterward; the
+  guard does not replace it.
+
 ## Using it from a future git hook
 
 The guard is built to be hook-callable, but **it does not install any hook** — wiring is left to the
@@ -100,10 +114,10 @@ operation automatically. When no run is active, simply remove (or don't write) `
 
 ## Limitations (v1)
 
-- **No hook installation.** This is the check only; wiring a hook is the adopter's choice (above).
-- **Consumes `forge-active-ticket/v1` only.** Producing that file is the orchestration shell's job;
-  wiring `/forge-run-ticket` to emit `schema` + `repo_root` (and to call the guard at its scope-check
-  step) is a separate, small follow-up.
+- **No hook installation.** This is the check only; wiring a git hook is the adopter's choice (above).
+  `/forge-run-ticket` calls the guard programmatically at its scope-check step, but installs no hook.
+- **Consumes `forge-active-ticket/v1` only.** That file is produced deterministically by
+  `forge active-ticket` (see Integration above), never hand-authored.
 - **Rename detection follows git.** A rename is only treated as a rename when git reports one (a staged
   rename); an unstaged move that git reports as a delete + an untracked add is checked as those two
   paths, which is still correct for the fence.

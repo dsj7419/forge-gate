@@ -25,7 +25,10 @@ Only writes allowed: a branch ref, the engineer's `allowed_paths` edits, and git
 2. **Packets:** `$FORGE packets "$EPIC"` → the packet set (pins absolute `repo_root` + cwd discipline). Record
    the selected ticket, branch, allowed/forbidden paths.
 3. **Lock + checkpoint:** write `.forge/lock.json` (`{session_id, command, epic_path, ticket, branch, repo_root,
-   pid, started_at}`) and `.forge/active-ticket.json`. Record checkpoint `{base, HEAD}` from
+   pid, started_at}`). Emit the active-ticket contract **deterministically from Core** — do **not** hand-author
+   its shape — from `$REPO`: `$FORGE active-ticket "$EPIC" --json > "$REPO/$EPIC/.forge/active-ticket.json"`.
+   Core owns `forge-active-ticket/v1` (absolute `repo_root`, `epic_path`, `ticket`, `branch`, allowed/forbidden/
+   protected paths) and selects the same ticket this run executes. Record checkpoint `{base, HEAD}` from
    `git -C "$REPO" rev-parse HEAD`.
 4. **Branch:** `git -C "$REPO" switch -c <branch>` (off the integration base, from the clean tree).
 5. **Engineer:** `$FORGE dispatch engineer "$EPIC"` → a dispatch spec `{subagent_type, prompt}`. Dispatch it
@@ -35,8 +38,13 @@ Only writes allowed: a branch ref, the engineer's `allowed_paths` edits, and git
    → ESCALATE (`AGENT_OUTPUT_INVALID`).
 6. **Verify (independent):** run the ticket's `verify_commands` yourself in `$REPO` (do not trust the engineer's
    claim). Failure → go to CORRECT (step 9).
-7. **Scope check:** `git -C "$REPO" status --porcelain`; confirm every change is under `allowed_paths` and none
-   touch `forbidden_paths`/protected. A violation → CORRECT/ESCALATE.
+7. **Scope check (deterministic guard):** from `$REPO`, run
+   `$FORGE guard paths --active "$REPO/$EPIC/.forge/active-ticket.json"`. It compares the worktree
+   (`git status --porcelain -z`) to the active ticket's fence and exits 0 only if every change is inside
+   `allowed_paths` and none touch `forbidden_paths`/protected. **Non-zero = scope failure → CORRECT/ESCALATE**
+   (it prints the offending paths, or `REPO_ROOT_MISMATCH` if run against the wrong repo). This replaces the
+   manual `git status` eyeball; the deterministic guard **augments** the scope-verifier (step 8) — it does not
+   replace it, both run.
 8. **Verifiers:** dispatch `semantic-verifier` then `scope-verifier` (`$FORGE dispatch <role> "$EPIC"` → Task).
    Capture each raw output to `.forge/<role>-output.yaml` (`semantic-verifier-output.yaml`,
    `scope-verifier-output.yaml`), then `$FORGE parse-agent <role> --file .forge/<role>-output.yaml` (invalid →

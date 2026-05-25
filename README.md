@@ -89,6 +89,12 @@ forge parse-agent <role> (--file <path> | --stdin)
                                      Exit 0 if valid, 1 if not. Roles: engineer | semantic-verifier |
                                      scope-verifier | pm.
 
+forge active-ticket <epic-path> [--json]
+                                     Emit the forge-active-ticket/v1 contract for the next ready ticket
+                                     (schema, absolute repo_root, epic_path, ticket, branch, allowed/
+                                     forbidden/protected paths) as JSON — the deterministic producer the
+                                     guard consumes. Read-only; writes nothing. Exit 1 if no ticket is ready.
+
 forge guard paths [--active <f>] [--json]
                                      Check the current worktree against the active ticket's path fence
                                      (default .forge/active-ticket.json). Deterministic and read-only:

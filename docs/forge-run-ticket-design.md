@@ -82,7 +82,9 @@ runtime artifacts (§12).
 
 ## 12. Artifacts written (proposed — confirm)
 Only under gitignored `.forge/` (nothing tracked, nothing committed):
-- `.forge/active-ticket.json` — pinned ticket/branch/paths/gate (for future hooks).
+- `.forge/active-ticket.json` — the `forge-active-ticket/v1` contract (absolute `repo_root`, ticket, branch,
+  allowed/forbidden/protected paths), emitted deterministically by `forge active-ticket` and consumed by
+  `forge guard paths` at the scope-check step (and callable by future hooks).
 - `.forge/lock.json` — concurrency guard (stale detection by pid/age).
 - `.forge/run-report.json` — the full transcript: packets used, each agent's validated output, verify results,
   PM decision, commit-gate materials, checkpoint.
