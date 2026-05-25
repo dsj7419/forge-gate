@@ -5,3 +5,10 @@ coverage/
 
 # Forge runtime state (ephemeral; never committed)
 .forge/
+
+# Local-only scratch for pilots / external imports — keep external or private
+# project material OUT of this public tool repo. (Note: sandbox-epic/ is a tracked
+# sterile ForgeGate test fixture and is intentionally NOT ignored.)
+pilot-local/
+sandbox-local/
+*.private.md
