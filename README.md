@@ -88,6 +88,13 @@ forge parse-agent <role> (--file <path> | --stdin)
                                      Validate an agent's structured YAML output against the role schema.
                                      Exit 0 if valid, 1 if not. Roles: engineer | semantic-verifier |
                                      scope-verifier | pm.
+
+forge guard paths [--active <f>] [--json]
+                                     Check the current worktree against the active ticket's path fence
+                                     (default .forge/active-ticket.json). Deterministic and read-only:
+                                     reads git status + the active-ticket file, writes nothing. Exit 0 if
+                                     every change is inside the fence, 1 on any violation or an
+                                     unreadable/invalid active ticket, 2 on usage error.
 ```
 
 ### Importing legacy sprints
@@ -105,12 +112,20 @@ forge parse-agent <role> (--file <path> | --stdin)
   intentionally flags those fields, the command prints "requires human completion before execution,"
   and exits non-zero. Complete the `TODO`s, then `forge validate` until the contract is clean.
 
+### Path-fence guard
+
+`forge guard paths` is a deterministic, read-only check that the worktree's changes stay inside the
+active ticket's `allowed_paths` (and touch no forbidden/protected path). It is the Core, no-LLM
+counterpart to the scope verifier and is designed to be callable from a future git hook — though it
+**installs nothing**. See [`docs/path-fence-guard.md`](docs/path-fence-guard.md) for the active-ticket
+shape, finding codes, and an example `pre-commit` hook.
+
 ### Exit codes
 
 | Code | Meaning |
 |------|---------|
-| `0`  | success (`validate`: report ok; `status`: contract loaded; `run --dry-run`: ticket ready; `parse-agent`: valid) |
-| `1`  | validation/status/parse failure (findings, contract could not load, blocked dry-run, invalid agent output, or an artifact-write failure) |
+| `0`  | success (`validate`: report ok; `status`: contract loaded; `run --dry-run`: ticket ready; `parse-agent`: valid; `guard paths`: inside the fence) |
+| `1`  | failure (findings, contract could not load, blocked dry-run, invalid agent output, an artifact-write failure, or a guard fence violation / unreadable active ticket) |
 | `2`  | usage error (missing path, unknown flag) |
 
 ### Artifact behavior
