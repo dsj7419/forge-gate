@@ -3,6 +3,7 @@ import * as path from "node:path";
 
 import { parseAgentOutput, type AgentRole } from "../agents/parse-output.js";
 import { runGuardPaths } from "../guard/cli.js";
+import { emitActiveTicket } from "./active-ticket.js";
 import { planImport } from "../importer/plan.js";
 import { executeImport } from "../importer/write.js";
 import { buildAgentDispatch, buildPmDispatch, type PmRawInputs } from "../orchestrator/dispatch.js";
@@ -38,6 +39,7 @@ const USAGE =
   "       forge dispatch <engineer|semantic-verifier|scope-verifier|pm> <epic-path>\n" +
   "       forge dispatch pm <epic-path> --engineer-output <f> --semantic-output <f> --scope-output <f> --facts <f.json>\n" +
   "       forge parse-agent <role> (--file <path> | --stdin)\n" +
+  "       forge active-ticket <epic-path> [--json]\n" +
   "       forge guard paths [--active <active-ticket.json>] [--json]";
 
 export function runCli(argv: string[], io: CliIo): number {
@@ -127,6 +129,19 @@ export function runCli(argv: string[], io: CliIo): number {
 
     const dispatch = buildAgentDispatch(role, result.packets, options);
     io.print(JSON.stringify(dispatch, null, 2));
+    return 0;
+  }
+
+  if (command === "active-ticket") {
+    if (!isUsablePath(epicPath)) return usageError(io);
+    const unknown = flags.filter((flag) => flag !== "--json");
+    if (unknown.length > 0) return usageError(io, `unknown option(s): ${unknown.join(", ")}`);
+    const result = emitActiveTicket(epicPath, process.cwd());
+    if (!result.ok) {
+      io.print(JSON.stringify({ ok: false, blockedReasons: result.blockedReasons }, null, 2));
+      return 1;
+    }
+    io.print(JSON.stringify(result.activeTicket, null, 2));
     return 0;
   }
 

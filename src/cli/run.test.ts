@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
 
 import type { ValidationReport } from "../validate/findings.js";
+import { ActiveTicketSchema } from "../guard/active-ticket.js";
 import { runGuardPaths, type GuardEnv } from "../guard/cli.js";
 import { runCli, type CliIo } from "./run.js";
 
@@ -385,6 +386,58 @@ describe("runCli dispatch pm — deterministic input assembly", () => {
     const code = runCli(["dispatch", "pm", sandboxEpicPath], io);
     expect(code).toBe(0);
     expect(out.join("\n")).not.toContain("## Inputs (each validated");
+  });
+});
+
+describe("runCli active-ticket (deterministic forge-active-ticket/v1 emitter)", () => {
+  test("emits a v1 object for the selected ticket, with an absolute repo_root, and writes nothing", () => {
+    const { io, out, artifacts } = fakeIo();
+    const code = runCli(["active-ticket", sandboxEpicPath], io);
+
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out.join("\n")) as { schema: string; repo_root: string; ticket: string };
+    expect(parsed.schema).toBe("forge-active-ticket/v1");
+    expect(path.isAbsolute(parsed.repo_root)).toBe(true);
+    expect(typeof parsed.ticket).toBe("string");
+    expect(ActiveTicketSchema.safeParse(parsed).success).toBe(true); // emitted output is consumable by the guard
+    expect(artifacts).toHaveLength(0);
+  });
+
+  test("the emitted paths match the selected ticket's packet fences", () => {
+    const { io, out } = fakeIo();
+    runCli(["active-ticket", sandboxEpicPath], io);
+    const emitted = JSON.parse(out.join("\n")) as { allowed_paths: string[]; forbidden_paths: string[] };
+
+    const packetsOut: string[] = [];
+    runCli(["packets", sandboxEpicPath], { ...fakeIo().io, print: (t) => packetsOut.push(t) });
+    const packets = JSON.parse(packetsOut.join("\n")) as { active_run: { allowed_paths: string[]; forbidden_paths: string[] } };
+
+    expect(emitted.allowed_paths).toEqual(packets.active_run.allowed_paths);
+    expect(emitted.forbidden_paths).toEqual(packets.active_run.forbidden_paths);
+  });
+
+  test("--json is accepted and emits the same JSON", () => {
+    const { io, out } = fakeIo();
+    expect(runCli(["active-ticket", sandboxEpicPath, "--json"], io)).toBe(0);
+    expect(JSON.parse(out.join("\n")).schema).toBe("forge-active-ticket/v1");
+  });
+
+  test("exits non-zero (ok:false) for a blocked/invalid epic", () => {
+    const { io, out } = fakeIo();
+    const code = runCli(["active-ticket", invalidTicketPath], io);
+
+    expect(code).toBe(1);
+    expect(JSON.parse(out.join("\n")).ok).toBe(false);
+  });
+
+  test("rejects an unknown flag with usage (exit 2)", () => {
+    const { io } = fakeIo();
+    expect(runCli(["active-ticket", sandboxEpicPath, "--wat"], io)).toBe(2);
+  });
+
+  test("treats a missing epic path as a usage error (exit 2)", () => {
+    const { io } = fakeIo();
+    expect(runCli(["active-ticket"], io)).toBe(2);
   });
 });
 
