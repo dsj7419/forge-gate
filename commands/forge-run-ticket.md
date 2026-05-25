@@ -26,9 +26,11 @@ Only writes allowed: a branch ref, the engineer's `allowed_paths` edits, and git
    the selected ticket, branch, allowed/forbidden paths.
 3. **Lock + checkpoint:** write `.forge/lock.json` (`{session_id, command, epic_path, ticket, branch, repo_root,
    pid, started_at}`). Emit the active-ticket contract **deterministically from Core** — do **not** hand-author
-   its shape — from `$REPO`: `$FORGE active-ticket "$EPIC" --json > "$REPO/$EPIC/.forge/active-ticket.json"`.
-   Core owns `forge-active-ticket/v1` (absolute `repo_root`, `epic_path`, `ticket`, `branch`, allowed/forbidden/
-   protected paths) and selects the same ticket this run executes. Record checkpoint `{base, HEAD}` from
+   its shape — from `$REPO`: `$FORGE active-ticket "$EPIC" --json > "$EPIC/.forge/active-ticket.json"`. (The
+   write path is derived from `$EPIC` **directly**, never string-joined onto `$REPO`, so it stays well-formed
+   whether `$EPIC` is repo-relative — resolved against the `$REPO` working directory — or absolute.) Core owns
+   `forge-active-ticket/v1` (absolute `repo_root`, `epic_path`, `ticket`, `branch`, allowed/forbidden/protected
+   paths) and selects the same ticket this run executes. Record checkpoint `{base, HEAD}` from
    `git -C "$REPO" rev-parse HEAD`.
 4. **Branch:** `git -C "$REPO" switch -c <branch>` (off the integration base, from the clean tree).
 5. **Engineer:** `$FORGE dispatch engineer "$EPIC"` → a dispatch spec `{subagent_type, prompt}`. Dispatch it
@@ -39,7 +41,7 @@ Only writes allowed: a branch ref, the engineer's `allowed_paths` edits, and git
 6. **Verify (independent):** run the ticket's `verify_commands` yourself in `$REPO` (do not trust the engineer's
    claim). Failure → go to CORRECT (step 9).
 7. **Scope check (deterministic guard):** from `$REPO`, run
-   `$FORGE guard paths --active "$REPO/$EPIC/.forge/active-ticket.json"`. It compares the worktree
+   `$FORGE guard paths --active "$EPIC/.forge/active-ticket.json"`. It compares the worktree
    (`git status --porcelain -z`) to the active ticket's fence and exits 0 only if every change is inside
    `allowed_paths` and none touch `forbidden_paths`/protected. **Non-zero = scope failure → CORRECT/ESCALATE**
    (it prints the offending paths, or `REPO_ROOT_MISMATCH` if run against the wrong repo). This replaces the
