@@ -55,18 +55,25 @@ Open your target repo in Claude Code and confirm these appear: `/forge-validate`
 `/forge-import`, `/forge-run-dry-run`, `/forge-run-ticket`. (Re-run `pnpm install-commands` after any ForgeGate
 update so the installed copies stay current.)
 
-## 5. Seed governance docs (recommended)
+## 5. Seed governance docs (strongly recommended)
 
-The agents read `docs/governance/*` if present. Copy the starters into your target repo and adapt:
+The agents (engineer, verifiers, PM) read `docs/governance/*` and a repo-root `CLAUDE.md` **if present**, and
+obey any that exist. They are **not required for the CLI to run** — agents degrade gracefully and note a missing
+doc rather than failing — but seeding them makes verification meaningfully stronger and the run feel
+intentional. Copy the **full starter set** and adapt each to your stack:
 
 ```bash
-mkdir -p docs/governance
-cp /d/Projects/forge-gate/templates/governance/DEFINITION-OF-DONE.md docs/governance/
-cp /d/Projects/forge-gate/templates/governance/TESTING-STANDARDS.md  docs/governance/
+cp -R /d/Projects/forge-gate/templates/governance docs/governance   # 6 docs: ENGINEERING-STANDARDS,
+                                                                     # DEFINITION-OF-READY, DEFINITION-OF-DONE,
+                                                                     # SECURITY-STANDARDS, TESTING-STANDARDS,
+                                                                     # AGENT-WORKING-AGREEMENT
+cp /d/Projects/forge-gate/templates/CLAUDE.md ./CLAUDE.md            # repo-root AI working instructions
+# PowerShell: Copy-Item -Recurse <forgegate>/templates/governance docs/governance ; Copy-Item <forgegate>/templates/CLAUDE.md ./CLAUDE.md
 ```
 
-Absence is handled gracefully (agents proceed on the ticket + charter alone), but seeded standards make
-verification stronger.
+These six `docs/governance/*` files plus the repo-root `CLAUDE.md` are exactly the set the agents and packets
+reference. **Edit each to fit your project** — they are short, generic starters, not drop-in policy. Absence of
+any one is tolerated; presence makes the verifiers stricter and more useful.
 
 ## 6. Create or import an epic contract
 

@@ -14,7 +14,7 @@ whether the work is genuinely done, what to correct, or when to escalate to the 
 - The journal tail and the ticket's halt-triggers.
 
 ## You MUST read
-- The ticket's Acceptance Criteria, Definitions of Done, and halt-triggers; `docs/governance/*`.
+- The ticket's Acceptance Criteria, Definition of Done, and halt-triggers; plus `docs/governance/*` **if present** (apply any that exist). If a referenced doc is absent, note it briefly and decide on the ticket contract, the validated agent outputs, and the orchestrator-confirmed facts — never invent a missing doc's contents.
 
 ## How you decide
 - **PASS** only when: both verifiers `APPROVE`, all `verify_commands` are green, no halt-trigger fired, and the

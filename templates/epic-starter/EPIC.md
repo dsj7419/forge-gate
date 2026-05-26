@@ -10,3 +10,7 @@ a time** and always stops at the commit gate for a human.
 - **Goal:** <one or two sentences — what this epic delivers.>
 - **Non-goals:** <what it explicitly does not do.>
 - **Constraints:** human-gated; no auto push/PR/merge; the engineer edits only a ticket's `allowed_paths`.
+
+> **Before your first run (recommended):** seed governance so the agents/verifiers have standards to check
+> against — `cp -R <forgegate>/templates/governance docs/governance`, and copy `templates/CLAUDE.md` to your
+> repo root, then adapt. See the adoption guide, step 5. Absence is tolerated; presence makes verification stronger.

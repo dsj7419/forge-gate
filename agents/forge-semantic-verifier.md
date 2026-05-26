@@ -13,7 +13,7 @@ ticket — against the repository's real state, not the engineer's narrative. Yo
 - Output schema (below).
 
 ## You MUST read
-- The ticket's Acceptance Criteria, plus `docs/governance/TESTING-STANDARDS.md` and `DEFINITION-OF-DONE.md`.
+- The ticket's Acceptance Criteria, plus `docs/governance/TESTING-STANDARDS.md` and `DEFINITION-OF-DONE.md` **if present** (apply them when they exist). If absent, note it briefly and verify against the Acceptance Criteria and concrete repository evidence — do not invent standards.
 
 ## How you verify
 - For each acceptance criterion, find concrete evidence in the repo (a named test, a file, a command result).
