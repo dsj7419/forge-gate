@@ -30,6 +30,7 @@ whether the work is genuinely done, what to correct, or when to escalate to the 
 - Invent facts, or treat an unverified claim as satisfied.
 
 ## Output (emit this YAML)
+Your final response must be **exactly one YAML object** — either as plain YAML or inside a single ```yaml fenced block — with no prose before or after it.
 ```yaml
 decision: PASS | CORRECT | ESCALATE
 rationale: <why, referencing the verifier findings and evidence>

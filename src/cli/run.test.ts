@@ -291,6 +291,30 @@ describe("runCli orchestration subcommands (read-only)", () => {
     expect(JSON.parse(out.join("\n")).ok).toBe(false);
   });
 
+  const pmBlock = "```yaml\ndecision: PASS\nrationale: ok\ndecision_id: D-001\njournal_entry: x\nhuman_gate_required: true\n```\n";
+
+  test("parse-agent --file accepts a single fenced YAML block with surrounding prose (exit 0)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-parse-"));
+    cliTempDirs.push(dir);
+    const file = path.join(dir, "fenced.yaml");
+    fs.writeFileSync(file, `Here is my decision:\n\n${pmBlock}\nThat completes the review.\n`);
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "pm", "--file", file], io);
+    expect(code).toBe(0);
+    expect(JSON.parse(out.join("\n")).ok).toBe(true);
+  });
+
+  test("parse-agent --file rejects two YAML fenced blocks (exit 1, ambiguous)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-parse-"));
+    cliTempDirs.push(dir);
+    const file = path.join(dir, "twofence.yaml");
+    fs.writeFileSync(file, `${pmBlock}\n${pmBlock}`);
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "pm", "--file", file], io);
+    expect(code).toBe(1);
+    expect(JSON.parse(out.join("\n")).ok).toBe(false);
+  });
+
   test("parse-agent rejects an unknown role (exit 2)", () => {
     const { io } = fakeIo();
     expect(runCli(["parse-agent", "wizard", "--stdin"], io)).toBe(2);

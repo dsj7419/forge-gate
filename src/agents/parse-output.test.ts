@@ -107,3 +107,61 @@ human_gate_required: false
     expect(parseAgentOutput("engineer", raw).ok).toBe(false);
   });
 });
+
+describe("parseAgentOutput — fenced YAML extraction", () => {
+  const fence = (body: string, tag = "yaml"): string => "```" + tag + "\n" + body.trim() + "\n```\n";
+
+  test("plain YAML (no fence) still parses — unchanged behavior", () => {
+    expect(parseAgentOutput("pm", pmValid).ok).toBe(true);
+  });
+
+  test("exactly one ```yaml fenced block parses (its contents only)", () => {
+    const result = parseAgentOutput("pm", fence(pmValid));
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.decision).toBe("PASS");
+  });
+
+  test("prose before and after a single fenced block still parses (extract the block)", () => {
+    const raw = `Here is my decision and reasoning.\n\n${fence(pmValid)}\nThat completes the review.`;
+    expect(parseAgentOutput("pm", raw).ok).toBe(true);
+  });
+
+  test("a ```yml (alt tag) fenced block parses", () => {
+    expect(parseAgentOutput("pm", fence(pmValid, "yml")).ok).toBe(true);
+  });
+
+  test("a non-YAML code fence is ignored — one ```yaml block alongside a ```json block still extracts the yaml", () => {
+    const raw = `${fence(pmValid)}\nFor reference:\n\`\`\`json\n{"note":"ignored"}\n\`\`\`\n`;
+    expect(parseAgentOutput("pm", raw).ok).toBe(true);
+  });
+
+  test("multiple ```yaml fenced blocks fail (ambiguous)", () => {
+    const raw = `${fence(pmValid)}\n${fence(pmValid)}`;
+    const result = parseAgentOutput("pm", raw);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("AGENT_OUTPUT_INVALID");
+  });
+
+  test("malformed YAML inside a single fence fails", () => {
+    expect(parseAgentOutput("pm", "```yaml\ndecision: [unclosed\n```").ok).toBe(false);
+  });
+
+  test("a schema-invalid object inside a fence still fails", () => {
+    expect(parseAgentOutput("pm", fence(pmValid.replace("decision: PASS", "decision: MAYBE"))).ok).toBe(false);
+  });
+
+  test("prose-only with no fence and no YAML object fails", () => {
+    expect(parseAgentOutput("pm", "I reviewed the change and it looks complete to me.").ok).toBe(false);
+  });
+
+  test("a non-YAML fence only (no yaml block) fails clearly", () => {
+    const raw = "Result below:\n```json\n{\"decision\":\"PASS\"}\n```\n";
+    expect(parseAgentOutput("pm", raw).ok).toBe(false);
+  });
+
+  test("the extracted object is validated against the role schema (engineer)", () => {
+    const result = parseAgentOutput("engineer", `done:\n\n${fence(engineerValid)}`);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.ticket).toBe("T01");
+  });
+});

@@ -26,6 +26,7 @@ ticket — against the repository's real state, not the engineer's narrative. Yo
 - Accept a claim without locating its evidence.
 
 ## Output (emit this YAML)
+Your final response must be **exactly one YAML object** — either as plain YAML or inside a single ```yaml fenced block — with no prose before or after it.
 ```yaml
 verdict: APPROVE | REJECT
 acceptance_checked:
