@@ -40,8 +40,17 @@ export function resolveRepoRoot(cwd: string): string | null {
   }
 }
 
-/** Read the worktree's changed files via `git status --porcelain -z`. Throws if git fails. */
+/**
+ * Read the worktree's changed files via `git status --porcelain -z`. Throws if git fails.
+ *
+ * `--untracked-files=all` is required: without it git collapses a wholly-untracked
+ * directory to the bare directory path (`src/slug/`), which no file-level fence can
+ * match — a false PATH_OUTSIDE_ALLOWED that also hides any forbidden file buried in
+ * the new directory. With it, every new file is listed individually and fenced.
+ */
 export function readChangedFiles(repoRoot: string): string[] {
-  const out = execFileSync("git", ["-C", repoRoot, "status", "--porcelain", "-z"], { encoding: "utf8" });
+  const out = execFileSync("git", ["-C", repoRoot, "status", "--porcelain", "-z", "--untracked-files=all"], {
+    encoding: "utf8",
+  });
   return parsePorcelain(out);
 }
