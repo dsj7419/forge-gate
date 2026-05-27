@@ -3,6 +3,7 @@ import * as path from "node:path";
 
 import { parseAgentOutput, type AgentRole } from "../agents/parse-output.js";
 import { runGuardPaths } from "../guard/cli.js";
+import { runVerifyInstall } from "../install/cli.js";
 import { emitActiveTicket } from "./active-ticket.js";
 import { planImport } from "../importer/plan.js";
 import { executeImport } from "../importer/write.js";
@@ -40,7 +41,8 @@ const USAGE =
   "       forge dispatch pm <epic-path> --engineer-output <f> --semantic-output <f> --scope-output <f> --facts <f.json> [--repo-root <path>]\n" +
   "       forge parse-agent <role> (--file <path> | --stdin)\n" +
   "       forge active-ticket <epic-path> [--json] [--repo-root <path>]\n" +
-  "       forge guard paths [--active <active-ticket.json>] [--json] [--repo-root <path>]";
+  "       forge guard paths [--active <active-ticket.json>] [--json] [--repo-root <path>]\n" +
+  "       forge verify-install";
 
 export function runCli(argv: string[], io: CliIo): number {
   const [command, epicPath, ...flags] = argv;
@@ -149,6 +151,10 @@ export function runCli(argv: string[], io: CliIo): number {
 
   if (command === "guard") {
     return runGuardPaths(argv.slice(1), io);
+  }
+
+  if (command === "verify-install") {
+    return runVerifyInstall(argv.slice(1), io);
   }
 
   if (command === "parse-agent") {

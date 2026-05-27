@@ -32,4 +32,4 @@ const agents = installDir("agents", "agents");
 console.log(`\nInstalled ${commands} command wrapper(s) and ${agents} agent charter(s) under ${claudeDir}`);
 console.log("Ensure the `forge` CLI is on PATH (e.g. `pnpm -C <forge-repo> link --global` after `pnpm build`),");
 console.log("or set FORGE_BIN, so the wrappers can find it.");
-console.log("Note: agent charters are definitions only — nothing dispatches them until the orchestrator exists.");
+console.log("Note: agent charters are now dispatched live by the `/forge-run-ticket` orchestrator.");

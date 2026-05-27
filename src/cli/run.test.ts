@@ -674,3 +674,24 @@ describe("runCli guard routing", () => {
     expect(err.join("\n")).toMatch(/usage/i);
   });
 });
+
+describe("runCli verify-install routing", () => {
+  test("routes `verify-install --wat` to the command, which rejects it with usage (exit 2)", () => {
+    const { io, err } = fakeIo();
+    const code = runCli(["verify-install", "--wat"], io);
+
+    expect(code).toBe(2);
+    expect(err.join("\n")).toMatch(/usage/i);
+  });
+
+  test("`verify-install` against the real checkout writes no validation artifact and returns 0 or 1", () => {
+    const { io, artifacts } = fakeIo();
+    const code = runCli(["verify-install"], io);
+
+    // Read-only: it never goes through the validation artifact seam.
+    expect(artifacts).toHaveLength(0);
+    // Whether the local ~/.claude is current is environment-dependent; the
+    // contract is only that it is one of the defined non-usage exit codes.
+    expect([0, 1]).toContain(code);
+  });
+});

@@ -101,6 +101,12 @@ forge guard paths [--active <f>] [--json]
                                      reads git status + the active-ticket file, writes nothing. Exit 0 if
                                      every change is inside the fence, 1 on any violation or an
                                      unreadable/invalid active ticket, 2 on usage error.
+
+forge verify-install                Read-only install-currency check: compare every *.md in this
+                                     checkout's commands/ and agents/ against the installed copies under
+                                     ~/.claude, reporting each as current, missing, or stale (a forge-*.md
+                                     with no checkout counterpart is informational `extra`). Writes
+                                     nothing. Exit 0 if all current, 1 if any missing/stale, 2 on usage.
 ```
 
 ### Importing legacy sprints
