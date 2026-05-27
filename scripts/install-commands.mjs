@@ -29,7 +29,18 @@ function installDir(sourceName, targetName) {
 const commands = installDir("commands", "commands");
 const agents = installDir("agents", "agents");
 
-console.log(`\nInstalled ${commands} command wrapper(s) and ${agents} agent charter(s) under ${claudeDir}`);
-console.log("Ensure the `forge` CLI is on PATH (e.g. `pnpm -C <forge-repo> link --global` after `pnpm build`),");
-console.log("or set FORGE_BIN, so the wrappers can find it.");
-console.log("Note: agent charters are now dispatched live by the `/forge-run-ticket` orchestrator.");
+console.log(`\nInstalled ForgeGate Claude integration under ${claudeDir}:`);
+console.log(`  commands: ${commands}`);
+console.log(`  agents:   ${agents}`);
+console.log("");
+console.log("Next — confirm the installed files match this checkout:");
+console.log("  node dist/cli.js verify-install        (exit 0 = current; 1 = stale/missing)");
+console.log("");
+console.log("If it reports stale or missing files, re-run:");
+console.log("  pnpm install-commands");
+console.log("  node dist/cli.js verify-install");
+console.log("");
+console.log("If the `forge` CLI is on PATH, you may also run:");
+console.log("  forge verify-install");
+console.log("");
+console.log("Agent charters are dispatched live by the `/forge-run-ticket` orchestrator.");
