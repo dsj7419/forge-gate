@@ -7,6 +7,22 @@
 
 _Authored 2026-05-26 (read-only discovery against `main` @ `b131709`). Evidence is cited as `file:line`._
 
+> **Update — shipped since this design.** The §8 proposal has landed:
+> - **PR #1 — `forge verify-install`.** The read-only install-currency command from §8 now exists
+>   (`src/install/verify-install.ts`, `src/install/cli.ts`), comparing this checkout's `commands/`+`agents/`
+>   against the installed `~/.claude` copies and reporting `current` / `stale` / `missing` (exit 0 / 1). Closes
+>   **G1**.
+> - **PR #2 — `install-commands` summary.** `scripts/install-commands.mjs` no longer prints the stale
+>   "definitions only" note; it now prints a post-install summary that points at `node dist/cli.js verify-install`
+>   and the re-run loop, and states the charters are dispatched live by `/forge-run-ticket`. Closes **G2**.
+> - **Read-only-wrapper guidance gap (G3) addressed in docs.** `docs/adopting-forgegate-in-a-project.md` now
+>   states that `/forge-validate`, `/forge-status`, and `/forge-run-dry-run` absolutize a relative epic against
+>   `TARGET_REPO` (relative works for in-target epics; absolute is for external epics), replacing the old
+>   "always pass absolute" guidance.
+>
+> Remaining gaps (G4 adoption-model is documented as A/B/C in the adoption guide; G5–G8) are unchanged. Hooks,
+> `forge doctor`, `forge init-target`, and an installer/plugin remain unbuilt future work.
+
 ---
 
 ## Scope & guardrails (from the PM brief)
@@ -121,9 +137,9 @@ with no link back to the checkout's version — update the checkout and the copi
 
 | # | Gap / risk | Evidence | Severity | Lane |
 |---|---|---|---|---|
-| G1 | **No install verification.** Can't tell if `~/.claude/{commands,agents}` match the checkout. Update the repo, forget to re-run `install-commands`, and you silently run stale wrappers/charters. | `install-commands.mjs:14-32` (blind copy, no stamp/checksum) | **High** | 1, 2 |
-| G2 | **Stale install message.** `install-commands.mjs:35` says charters "are definitions only — nothing dispatches them until the orchestrator exists." False since `/forge-run-ticket` shipped. | `install-commands.mjs:35` vs `README.md:253-254` | Medium | 1, 2 |
-| G3 | **Adoption guide §6 partially stale.** Says read-only wrappers "do not yet take `--repo-root` … pass an absolute epic path." They now absolutize relative epics against `TARGET_REPO`, so relative paths work for in-target epics; absolute is only required for **external** epics. | `adopting…md:99-106` vs `forge-validate.md:15-16` | Medium | 2 |
+| G1 | **No install verification.** Can't tell if `~/.claude/{commands,agents}` match the checkout. Update the repo, forget to re-run `install-commands`, and you silently run stale wrappers/charters. **RESOLVED (PR #1):** `forge verify-install` now reports `current`/`stale`/`missing`. | `install-commands.mjs:14-32` (blind copy, no stamp/checksum) | **High** | 1, 2 |
+| G2 | **Stale install message.** `install-commands.mjs:35` said charters "are definitions only — nothing dispatches them until the orchestrator exists." False since `/forge-run-ticket` shipped. **RESOLVED (PR #2):** the summary now points at `verify-install`, shows the re-run loop, and notes charters are dispatched live. | `install-commands.mjs:35` vs `README.md:253-254` | Medium | 1, 2 |
+| G3 | **Adoption guide §6 partially stale.** Said read-only wrappers "do not yet take `--repo-root` … pass an absolute epic path." They now absolutize relative epics against `TARGET_REPO`, so relative paths work for in-target epics; absolute is only required for **external** epics. **RESOLVED (docs):** the adoption guide's epic-path note is corrected. | `adopting…md:99-106` vs `forge-validate.md:15-16` | Medium | 2 |
 | G4 | **No documented "preferred" target-repo adoption model.** The proven pilot used an external `pilot-local/` epic + `--repo-root`; the adoption guide assumes an in-target `docs/epics/`. No guidance on which to use when, so an adopter can create a second source of truth. | `.gitignore:15-16`; `adopting…md:78-87` | Medium | 1, 2 |
 | G5 | **`FORGE_REPO` durability is undocumented per-shell.** The `:?` guard fails loudly (good), but there's no canonical "set it once" recipe per platform; the guide gives Git Bash + a PowerShell aside but no durable-persistence recipe (`setx`, profile). | `adopting…md:23-35` | Low | 1, 2 |
 | G6 | **No uninstall / prune.** Removed or renamed commands linger in `~/.claude`. Low impact at 5+4 files, but it's drift. | `install-commands.mjs` (copy-only) | Low | 1, 2 |

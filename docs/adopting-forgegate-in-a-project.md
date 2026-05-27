@@ -10,15 +10,53 @@ Examples use **Windows / Git Bash** (this is a Windows workflow). PowerShell not
 
 ## 1. Install ForgeGate (once per machine)
 
-Clone the ForgeGate repo somewhere stable and build it:
+There are two setup lanes. They differ **only** in where the checkout comes from; from `pnpm install` onward the
+steps are identical, and both end with `node dist/cli.js verify-install` confirming the installed `~/.claude`
+copies are current. Setup is "done" at that verify step — **not** at `install-commands`.
+
+### Lane B — public GitHub (clone fresh)
+
+You do not have a checkout yet. Clone the ForgeGate repo somewhere stable, build it, install the commands, and
+confirm currency:
 
 ```bash
 git clone https://github.com/dsj7419/forge-gate.git /d/Projects/forge-gate
 cd /d/Projects/forge-gate
 pnpm install
-pnpm build      # emits dist/ (the binary the wrappers run)
-pnpm test       # optional sanity: should be green
+pnpm build                        # emits dist/ (the binary the wrappers run)
+pnpm install-commands             # commands/*.md → ~/.claude/commands, agents/*.md → ~/.claude/agents
+node dist/cli.js verify-install   # confirm installed copies match this checkout (exit 0 = current)
 ```
+
+Then set `FORGE_REPO` to your **fresh clone** (step 2).
+
+### Lane A — Dan-local (reuse the existing checkout)
+
+You already have the ForgeGate checkout at a stable path (e.g. `/d/Projects/forge-gate`). Bring it — and the
+installed commands/charters — current from the existing checkout:
+
+```bash
+git pull                          # in your existing ForgeGate checkout
+pnpm install
+pnpm build                        # emits dist/
+pnpm install-commands             # commands/*.md → ~/.claude/commands, agents/*.md → ~/.claude/agents
+node dist/cli.js verify-install   # confirm installed copies match this checkout (exit 0 = current)
+```
+
+Then set `FORGE_REPO` to **that existing local checkout** (step 2).
+
+### When verify-install reports stale/missing (either lane)
+
+`verify-install` is read-only and lists each `~/.claude` file as `current`, `stale`, or `missing`. If anything
+is `stale` or `missing` (e.g. you pulled but forgot to re-install), re-run the install and re-check:
+
+```bash
+pnpm install-commands
+node dist/cli.js verify-install
+```
+
+> `node dist/cli.js verify-install` is the **primary** currency check because it works before the CLI is on
+> `PATH`. `forge verify-install` is the same check, available once `forge` is on `PATH` (see step 2).
 
 ## 2. Set `FORGE_REPO` — the ForgeGate checkout (distinct from your target repo)
 
@@ -31,6 +69,13 @@ export FORGE_REPO=/d/Projects/forge-gate          # Git Bash
 # PowerShell:  $env:FORGE_REPO = 'D:/Projects/forge-gate'   (use setx for persistence)
 ```
 
+**The value is lane-specific:**
+
+- **Lane A (Dan-local):** `FORGE_REPO` = the path of the ForgeGate checkout you already have (e.g.
+  `/d/Projects/forge-gate`) — the same checkout you `git pull` + rebuild + re-install in step 1.
+- **Lane B (public GitHub):** `FORGE_REPO` = the path of the fresh clone from step 1 (`export FORGE_REPO=$(pwd)`
+  from inside the clone is the simplest way to set it for the session).
+
 Optional alternatives the resolver also accepts: set `FORGE_BIN` to pin a specific built binary, or
 `pnpm -C /d/Projects/forge-gate link --global` to put `forge` on your `PATH`.
 
@@ -41,19 +86,17 @@ Optional alternatives the resolver also accepts: set `FORGE_BIN` to pin a specif
 > passes the CLI `--repo-root <target>` so packets/active-ticket/guard pin the target — never `FORGE_REPO`.
 > The two coincide only when ForgeGate operates on itself; for any other project they differ.
 
-## 3. Install the slash commands + agent charters
+## 3. The slash commands + agent charters are installed (step 1)
 
-From the ForgeGate repo:
-
-```bash
-pnpm install-commands     # copies commands/*.md -> ~/.claude/commands, agents/*.md -> ~/.claude/agents
-```
+Step 1 already ran `pnpm install-commands` — copying `commands/*.md → ~/.claude/commands` and
+`agents/*.md → ~/.claude/agents` — and confirmed the copies are current with `node dist/cli.js verify-install`.
+After any ForgeGate update, re-run that install/verify loop (`pnpm install-commands` then
+`node dist/cli.js verify-install`) so the installed copies stay current.
 
 ## 4. Confirm the slash commands are available
 
 Open your target repo in Claude Code and confirm these appear: `/forge-validate`, `/forge-status`,
-`/forge-import`, `/forge-run-dry-run`, `/forge-run-ticket`. (Re-run `pnpm install-commands` after any ForgeGate
-update so the installed copies stay current.)
+`/forge-import`, `/forge-run-dry-run`, `/forge-run-ticket`.
 
 ## 5. Seed governance docs (strongly recommended)
 
@@ -96,19 +139,35 @@ cp -r /d/Projects/forge-gate/templates/epic-starter docs/epics/my-first-epic
 > Keep the first ticket **tiny, low-risk, and tightly fenced** (narrow `allowed_paths`, explicit
 > `forbidden_paths`, concrete `verify_commands`). No migrations, auth, secrets, or production config for a pilot.
 
-> **External-repo epic paths (read-only wrappers).** `/forge-run-ticket` resolves the target repo and
-> absolutizes the epic for you, so a relative path is fine there. The read-only wrappers below —
-> `/forge-validate`, `/forge-run-dry-run`, `/forge-status`, `/forge-import` — do **not** yet take `--repo-root`,
-> and under the pnpm-fallback CLI resolution the CLI's working directory can be your **ForgeGate checkout**, not
-> the target. **Robust default: pass an absolute epic path** to these. (Alternatively, install `forge` via
-> `FORGE_BIN` or `pnpm link --global` so the CLI inherits the target's cwd and relative paths resolve there.) A
-> small future follow-up may add target-repo/`--repo-root` handling to these wrappers; until then, absolute epic
-> paths are the safe external pattern.
+### Where the epic lives — adoption model (pick one, never two for the same work)
+
+The epic contract can live in three places. Choose by intent; mixing two creates a second source of truth.
+
+- **A. External / gitignored epic — best for trace-free pilots.** The epic lives **outside** the target repo
+  (e.g. under `$FORGE_REPO/pilot-local/<name>/`, which is gitignored), and you point ForgeGate at it with an
+  absolute path while the target is open in Claude Code. The target repo is never touched by the contract
+  itself, so a pilot leaves **zero traces**. This is the proven pilot pattern.
+- **B. Committed `docs/epics` in the target repo — best for real, ongoing work.** The epic lives at
+  `docs/epics/<slug>/` inside the target and is committed alongside the code. The plan is version-controlled,
+  reviewable, and the single source of truth — exactly what you want for genuine planning. This is the default
+  this guide assumes.
+- **C. Hidden per-target gitignored planning folder — not recommended.** A gitignored planning folder *inside*
+  the target (e.g. `.forgegate/`). It is the worst of both: a hidden parallel plan that is easily lost and
+  invisible to reviewers, **creating a second source of truth**. Avoid it.
+
+> **Relative vs. absolute epic paths (read-only wrappers — corrected).** `/forge-run-ticket` resolves the target
+> repo and absolutizes the epic for you. The read-only wrappers `/forge-validate`, `/forge-status`, and
+> `/forge-run-dry-run` now **absolutize a relative epic path against `TARGET_REPO`** (the git root of the open
+> project), so **relative paths work for in-target epics** (model B) — e.g. `/forge-validate docs/epics/my-first-epic`.
+> **Absolute epic paths are useful/required for external epics** (model A), which live outside the target.
+> (Exception: `/forge-import` forwards its arguments raw and does not absolutize; pass it an explicit `--out`
+> path — absolute when importing for an external/model-A epic.)
 
 ## 7. Validate the contract
 
 ```bash
-/forge-validate /abs/path/to/your-repo/docs/epics/my-first-epic   # absolute path (see note above)
+/forge-validate docs/epics/my-first-epic                          # model B: relative resolves against TARGET_REPO
+/forge-validate /abs/path/to/external/epics/my-first-epic         # model A: external epic → absolute path
 ```
 
 Fix any findings until it reports `OK`. A contract with `TODO` placeholders (from import) is a human-completion
@@ -117,7 +176,8 @@ draft and will intentionally fail until you complete it.
 ## 8. Dry-run (read-only preview)
 
 ```bash
-/forge-run-dry-run /abs/path/to/your-repo/docs/epics/my-first-epic   # absolute path (see note above)
+/forge-run-dry-run docs/epics/my-first-epic                          # model B: relative resolves against TARGET_REPO
+/forge-run-dry-run /abs/path/to/external/epics/my-first-epic         # model A: external epic → absolute path
 ```
 
 Confirm it selects the ticket you intend, with the right paths, verify commands, and gate. Nothing changes.
@@ -154,7 +214,9 @@ dry-run selects the next ticket (not the finished one):
 
 ## What ForgeGate does NOT do (v1)
 
-No auto commit / push / PR / merge · no status write-back · no journal automation · no path-fence hooks ·
-no multi-ticket loop. These are deliberately deferred; the human stays in control at the gate.
+v1 runs **one low-risk ticket at a time and stops at the commit gate.** No auto commit / push / PR / merge · no
+status write-back · no journal write · no multi-ticket loop. Hooks (path-fence pre-commit), `forge doctor`,
+`forge init-target`, and an installer/plugin remain **future work — not yet built**. These are deliberately
+deferred; the human stays in control at the gate.
 
 See also: [`first-pilot-checklist.md`](first-pilot-checklist.md) before your first real run.

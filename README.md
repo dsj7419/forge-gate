@@ -32,8 +32,13 @@ What exists today, exercised end-to-end on a real one-ticket run:
   (engineer → independent verify → verifiers → PM), which stops at the commit gate. It has driven a real
   ticket end-to-end.
 
-What is **not** built yet: hooks, status write-back, journal append, local commit-at-gate automation, and a
-multi-ticket loop. v1 always stops at the commit gate for a human.
+- **`forge verify-install`** — a read-only install-currency check that compares this checkout's
+  `commands/`+`agents/` against the installed copies under `~/.claude` and reports each as current, stale, or
+  missing. `pnpm install-commands` now points you at it (and prints the re-run loop) instead of a stale note.
+
+What is **not** built yet: hooks, `forge doctor`, `forge init-target`, an installer/plugin, status write-back,
+journal append, local commit-at-gate automation, and a multi-ticket loop. v1 always stops at the commit gate
+for a human.
 
 ## Quickstart
 
@@ -149,11 +154,54 @@ shape, finding codes, and an example `pre-commit` hook.
 
 ## Install & setup
 
+ForgeGate is installed from a checkout — there is no published package yet. There are two setup lanes; pick the
+one that matches you. Both end with a **verify-install currency check** (`node dist/cli.js verify-install`), so
+the install flow is "done" only once the installed `~/.claude` copies are confirmed current — not at
+`install-commands`.
+
+### Lane A — Dan-local (reuse the existing checkout)
+
+You already have the ForgeGate checkout. Bring it (and the installed commands/charters) current:
+
 ```bash
-pnpm install            # install dependencies
-pnpm build              # emit dist/
-pnpm install-commands   # install commands/*.md → ~/.claude/commands/ and agents/*.md → ~/.claude/agents/
+git pull                              # in your existing ForgeGate checkout
+pnpm install
+pnpm build                            # emit dist/
+pnpm install-commands                 # commands/*.md → ~/.claude/commands/, agents/*.md → ~/.claude/agents/
+node dist/cli.js verify-install       # confirm the installed copies match this checkout (exit 0 = current)
 ```
+
+If `verify-install` reports any file `stale` or `missing`, re-run the install then re-check:
+
+```bash
+pnpm install-commands
+node dist/cli.js verify-install
+```
+
+Set `FORGE_REPO` to **this local checkout** (see **CLI resolver and environment** below) — for Dan-local it is
+the path of the ForgeGate checkout you already have.
+
+### Lane B — public GitHub (clone fresh)
+
+You do not have a checkout yet. Clone ForgeGate, build, install, and verify:
+
+```bash
+git clone https://github.com/dsj7419/forge-gate.git
+cd forge-gate
+pnpm install
+pnpm build                            # emit dist/
+pnpm install-commands                 # commands/*.md → ~/.claude/commands/, agents/*.md → ~/.claude/agents/
+node dist/cli.js verify-install       # confirm the installed copies match this checkout (exit 0 = current)
+export FORGE_REPO=$(pwd)              # set FORGE_REPO to your fresh clone (PowerShell: setx FORGE_REPO "<path>")
+```
+
+If `verify-install` reports `stale`/`missing`, re-run `pnpm install-commands` then `node dist/cli.js verify-install`.
+
+> **The two lanes differ only in where the checkout comes from.** Dan-local reuses an existing local ForgeGate
+> checkout and points `FORGE_REPO` at it; public users clone fresh and point `FORGE_REPO` at their clone. From
+> `pnpm install` onward the steps are identical. `node dist/cli.js verify-install` is the primary
+> currency-confirmation step because it works before the CLI is on `PATH`; `forge verify-install` is only an
+> option once `forge` is on `PATH`.
 
 ### Develop
 
@@ -245,6 +293,10 @@ Forge v1 is intentionally conservative and human-gated:
   recovery path rather than having it silently overwritten.
 - **Failed runs preserve evidence.** A failure writes `.forge/run-report.json`, leaves the branch and working
   tree intact, and produces a recovery brief with *suggested* (not executed) cleanup commands.
+
+In one line: **one low-risk ticket at a time, stopping at the commit gate** — no auto commit / push / PR /
+merge, no status write-back, no journal write. Hooks, `forge doctor`, `forge init-target`, and an
+installer/plugin remain **future work** (not yet built); only `verify-install` ships beyond the core run loop.
 
 ### Not autonomous / not magic
 

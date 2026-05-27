@@ -11,6 +11,9 @@ it first. (See [`adopting-forgegate-in-a-project.md`](adopting-forgegate-in-a-pr
       (the project open in Claude Code). `/forge-run-ticket` resolves the target from the current git root
       (`git rev-parse --show-toplevel`), runs all git/verify there, and passes the CLI `--repo-root <target>`.
 - [ ] `pnpm install-commands` run; `/forge-validate`, `/forge-run-dry-run`, `/forge-run-ticket` available in Claude Code.
+- [ ] **Install currency confirmed:** after `pnpm build`, run `node dist/cli.js verify-install` (exit 0 = the
+      installed `~/.claude` copies match this checkout). If it reports any file `stale`/`missing`, re-run
+      `pnpm install-commands` then `node dist/cli.js verify-install` until it is clean.
 
 ## Target repo state
 
