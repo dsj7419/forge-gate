@@ -4,6 +4,7 @@ title: ForgeGate installation & adoption
 sprints:
   - sprint-01-verify-install
   - sprint-02-install-summary
+  - sprint-03-setup-docs
 gate_policy:
   default_push: human
   default_merge: human

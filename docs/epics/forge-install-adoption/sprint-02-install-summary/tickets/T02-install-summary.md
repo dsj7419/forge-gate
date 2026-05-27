@@ -6,7 +6,7 @@ kind: green
 risk: low
 change_class: feature
 blast_radius: local
-status: pending
+status: merged
 gate: pr
 gate_override: false
 allowed_paths: ["scripts/install-commands.mjs", "src/scripts/install-commands.integration.test.ts"]

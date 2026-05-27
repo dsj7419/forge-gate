@@ -1,10 +1,10 @@
 schema_version: 1
-sprint: sprint-02-install-summary
+sprint: sprint-03-setup-docs
 integration_base: main
 gate_policy:
   default_push: human
   default_merge: human
 tickets:
-  - id: T02
+  - id: T03
     kind: green
-    status: merged
+    status: pending
