@@ -10,6 +10,7 @@ import { executeImport } from "../importer/write.js";
 import { buildAgentDispatch, buildPmDispatch, type PmRawInputs } from "../orchestrator/dispatch.js";
 import { generateRunPackets } from "../orchestrator/packets.js";
 import { runDryRun } from "../run/dry-run.js";
+import { defaultRunReportIo, runWriteRunReport, type RunReportIo } from "../run-report/cli.js";
 import { buildReport, type ValidationReport } from "../validate/findings.js";
 import { validateIntegrity } from "../validate/integrity.js";
 import { loadContract } from "../validate/load.js";
@@ -31,6 +32,14 @@ export type CliIo = {
   writeArtifact: (epicPath: string, report: ValidationReport) => void;
 };
 
+/**
+ * Optional injected IO seams. Tests pass these to keep `forge run-report write`
+ * from touching the real filesystem; production calls let them default.
+ */
+export type RunCliOptions = {
+  runReportIo?: RunReportIo;
+};
+
 const USAGE =
   "usage: forge validate <epic-path> [--json]\n" +
   "       forge status <epic-path>\n" +
@@ -42,10 +51,15 @@ const USAGE =
   "       forge parse-agent <role> (--file <path> | --stdin) [--expected-decision-id <D-NNN> (pm only)]\n" +
   "       forge active-ticket <epic-path> [--json] [--repo-root <path>]\n" +
   "       forge guard paths [--active <active-ticket.json>] [--json] [--repo-root <path>]\n" +
+  "       forge run-report write <epic-path> --repo-root <p> --result PASS|ESCALATE --ticket-title <s> --checkpoint-base <sha> --checkpoint-head <sha> --guard-result <s> --guard-exit <n> [--engineer-output <p>] [--semantic-output <p>] [--scope-output <p>] [--pm-output <p>] [--facts <p>] [--active-ticket <p>] [--out <p>] [--proposed-status-transition <s>] [--suggested-commit-message <s>] [--suggested-command <s>] [--note <s>]\n" +
   "       forge verify-install";
 
-export function runCli(argv: string[], io: CliIo): number {
+export function runCli(argv: string[], io: CliIo, options: RunCliOptions = {}): number {
   const [command, epicPath, ...flags] = argv;
+
+  if (command === "run-report") {
+    return runWriteRunReport(argv.slice(1), io, options.runReportIo ?? defaultRunReportIo);
+  }
 
   if (command === "validate") {
     if (!isUsablePath(epicPath)) return usageError(io);

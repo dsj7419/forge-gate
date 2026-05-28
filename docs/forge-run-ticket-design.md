@@ -91,6 +91,18 @@ Only under gitignored `.forge/` (nothing tracked, nothing committed):
 If you want v1 to write **zero** files (session-only state), say so and I'll keep it all in-session; my
 recommendation is the gitignored `.forge/` set, since it's runtime-only and feeds future hooks/resume.
 
+**Run-report ownership clarification (Core-owned runtime evidence only).** As of the
+`forge-run-report/v1` promotion, `$EPIC/.forge/run-report.json` is a Core-owned, Zod-validated artifact
+written exclusively by `forge run-report write` (`src/run-report/`). It is **runtime evidence only**:
+not status write-back, not journal automation, not run identity (no `run_id`/`attempt_id`), and
+explicitly not commit/push/PR/merge automation. The v1 safety thesis is enforced by the schema —
+every `safety.*` boolean is `z.literal(false)`, so any future caller attempting to record a commit,
+push, PR open, merge, status write-back, or journal write is rejected by the type at the boundary; a
+deliberate `forge-run-report/v2` schema bump is required to unlock any of those. The orchestrator
+(§10/§11) no longer hand-authors the JSON; it only supplies runtime metadata (`--result`, checkpoint
+SHAs, guard outcome, optional commit-gate materials, optional `--note` narrative) and lets Core
+assemble, validate, and write a deterministic, byte-identical artifact per inputs.
+
 ---
 
 ## Build order (after this note is approved)

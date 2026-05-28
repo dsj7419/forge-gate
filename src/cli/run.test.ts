@@ -8,6 +8,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import type { ValidationReport } from "../validate/findings.js";
 import { ActiveTicketSchema } from "../guard/active-ticket.js";
 import { runGuardPaths, type GuardEnv } from "../guard/cli.js";
+import type { RunReportIo } from "../run-report/cli.js";
 import { runCli, type CliIo } from "./run.js";
 
 const cliTempDirs: string[] = [];
@@ -799,5 +800,113 @@ describe("runCli verify-install routing", () => {
     // Whether the local ~/.claude is current is environment-dependent; the
     // contract is only that it is one of the defined non-usage exit codes.
     expect([0, 1]).toContain(code);
+  });
+});
+
+describe("runCli run-report write routing", () => {
+  test("USAGE advertises the run-report write subcommand", () => {
+    const { io, err } = fakeIo();
+    runCli(["frobnicate"], io); // any unknown command surfaces USAGE
+    expect(err.join("\n")).toContain("run-report write");
+  });
+
+  test("happy-path: runCli(['run-report', 'write', <epic>, ...args], io, {runReportIo}) writes one report", () => {
+    const epic = "/epic/example";
+    const forge = `${epic}/.forge`;
+    const state: Record<string, string> = {
+      [`${forge}/engineer-output.yaml`]: [
+        "ticket: T01",
+        "summary: add helper",
+        "files_changed: [{ path: src/sandbox/add.ts, adds: 3, dels: 0 }]",
+        "tests: { added: 2, changed: 0 }",
+        "commands_run: [{ cmd: pnpm test, result: pass }]",
+        "within_allowed_paths: true",
+        "",
+      ].join("\n"),
+      [`${forge}/semantic-verifier-output.yaml`]: [
+        "verdict: APPROVE",
+        'acceptance_checked: [{ id: 1, status: met, evidence: "a.ts:1" }]',
+        "findings: []",
+        "risk_level: low",
+        "",
+      ].join("\n"),
+      [`${forge}/scope-verifier-output.yaml`]: [
+        "verdict: APPROVE",
+        "changed_files: [src/sandbox/add.ts]",
+        "allowed_path_status: clean",
+        "forbidden_path_violations: []",
+        "unexpected_files: []",
+        "recommendation: in scope",
+        "",
+      ].join("\n"),
+      [`${forge}/pm-output.yaml`]: [
+        "decision: PASS",
+        "rationale: green",
+        "decision_id: D-001",
+        "journal_entry: T01 PASS",
+        "human_gate_required: true",
+        "",
+      ].join("\n"),
+      [`${forge}/orchestrator-facts.json`]: JSON.stringify({
+        parse_validation: { engineer: true, semantic_verifier: true, scope_verifier: true },
+        verify_command_results: [{ cmd: "pnpm test", result: "pass" }],
+        final_changed_files: ["src/sandbox/add.ts"],
+        final_branch_status: { branch: "forge/x/T01", ahead_of_base: 0, committed: false },
+      }),
+      [`${forge}/active-ticket.json`]: JSON.stringify({
+        schema: "forge-active-ticket/v1",
+        repo_root: "/repo",
+        epic_path: epic,
+        ticket: "T01",
+        branch: "forge/x/T01",
+        allowed_paths: ["src/sandbox/**"],
+        forbidden_paths: ["package.json"],
+        protected_paths: ["**/manifest.yaml"],
+      }),
+    };
+
+    const writes: { file: string; contents: string }[] = [];
+    const runReportIo: RunReportIo = {
+      readFileIfExists: (file) => {
+        const normalized = file.replace(/\\/g, "/");
+        return Object.prototype.hasOwnProperty.call(state, normalized) ? (state[normalized] ?? null) : null;
+      },
+      writeFile: (file, contents) => {
+        writes.push({ file: file.replace(/\\/g, "/"), contents });
+        state[file.replace(/\\/g, "/")] = contents;
+      },
+    };
+
+    const { io } = fakeIo();
+    const code = runCli(
+      [
+        "run-report",
+        "write",
+        epic,
+        "--repo-root",
+        "/repo",
+        "--result",
+        "PASS",
+        "--ticket-title",
+        "Add helper",
+        "--checkpoint-base",
+        "abc123",
+        "--checkpoint-head",
+        "abc123",
+        "--guard-result",
+        "OK",
+        "--guard-exit",
+        "0",
+      ],
+      io,
+      { runReportIo },
+    );
+
+    expect(code).toBe(0);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.file).toBe(`${forge}/run-report.json`);
+    const parsed = JSON.parse(writes[0]?.contents ?? "") as { schema: string; result: string };
+    expect(parsed.schema).toBe("forge-run-report/v1");
+    expect(parsed.result).toBe("PASS");
   });
 });
