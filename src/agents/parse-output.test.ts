@@ -106,6 +106,39 @@ human_gate_required: false
     const raw = `${engineerValid}\nbogus_field: true\n`;
     expect(parseAgentOutput("engineer", raw).ok).toBe(false);
   });
+
+  // Characterization: pin the exact fragility that caused a real AGENT_OUTPUT_INVALID
+  // halt. An acceptance_checked entry written as an inline flow mapping whose evidence
+  // is an unquoted, comma-bearing scalar gets split at the comma — the trailing fragment
+  // becomes a spurious key (value null), which the strict schema rejects. Core stays
+  // strict: the malformed output is rejected, never repaired into something valid.
+  test("a flow-style acceptance entry with an unquoted comma-bearing scalar is rejected (not repaired)", () => {
+    const raw = `
+verdict: APPROVE
+acceptance_checked:
+  - { id: 1, status: met, evidence: actor_test.go:line 5, TestActor }
+findings: []
+risk_level: low
+`;
+    const result = parseAgentOutput("semantic-verifier", raw);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("AGENT_OUTPUT_INVALID");
+  });
+
+  // The block-style, quoted form the hardened charter now prescribes for the same
+  // entry parses cleanly — proving the charter guidance steers agents to valid output.
+  test("the block-style quoted form of the same acceptance entry is accepted", () => {
+    const raw = `
+verdict: APPROVE
+acceptance_checked:
+  - id: 1
+    status: met
+    evidence: "actor_test.go:line 5, TestActor"
+findings: []
+risk_level: low
+`;
+    expect(parseAgentOutput("semantic-verifier", raw).ok).toBe(true);
+  });
 });
 
 describe("parseAgentOutput — fenced YAML extraction", () => {

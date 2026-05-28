@@ -25,13 +25,21 @@ allowed and nothing it forbade. You read and inspect git; you never edit.
 
 ## Output (emit this YAML)
 Your final response must be **exactly one YAML object** — either as plain YAML or inside a single ```yaml fenced block — with no prose before or after it.
+
+**YAML-output rules (follow exactly — Core's parser is strict and will reject malformed output):**
+- Use block-style YAML mappings: one key per line. Do **not** use inline flow mappings (`{ ... }`) for object lists; write each entry as a block `- key:` list item. (This output has only string-list fields, but the rule holds for any object list.)
+- Quote every string value that contains a comma, colon, slash, bracket, brace, parenthesis, or `#`. File paths with slashes and a `recommendation` line with punctuation **must** be quoted (e.g. `- "src/agents/parse-output.ts"`, `recommendation: "scope is clean"`).
+- Emit exactly one YAML object — plain YAML or a single ```yaml fenced block — with no prose before or after it.
+- Keep the field names, enums, and required fields exactly as shown.
+
 ```yaml
-verdict: APPROVE | REJECT
-changed_files: [<rel path>]
-allowed_path_status: clean | violations
-forbidden_path_violations: [<rel path>]
-unexpected_files: [<rel path not covered by allowed_paths>]
-recommendation: <one line: what to revert/move, or "scope is clean">
+verdict: APPROVE        # APPROVE | REJECT
+changed_files:
+  - "<rel path>"
+allowed_path_status: clean   # clean | violations
+forbidden_path_violations: []   # list of rel paths
+unexpected_files: []    # list of rel paths not covered by allowed_paths
+recommendation: "<one line: what to revert/move, or 'scope is clean'>"
 ```
 
 ## Anti-theater rules

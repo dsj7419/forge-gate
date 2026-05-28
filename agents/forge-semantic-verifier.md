@@ -27,14 +27,26 @@ ticket — against the repository's real state, not the engineer's narrative. Yo
 
 ## Output (emit this YAML)
 Your final response must be **exactly one YAML object** — either as plain YAML or inside a single ```yaml fenced block — with no prose before or after it.
+
+**YAML-output rules (follow exactly — Core's parser is strict and will reject malformed output):**
+- Use block-style YAML mappings: one key per line. Do **not** use inline flow mappings (`{ ... }`) for the object-list fields `acceptance_checked` and `findings`; write each entry as a block `- key:` list item.
+- Quote every string value that contains a comma, colon, slash, bracket, brace, parenthesis, or `#`. An evidence pointer such as `actor_test.go:42` contains a colon, so it **must** be quoted: `evidence: "actor_test.go:42"`. An unquoted, comma-bearing scalar inside a flow mapping is split into spurious keys and rejected.
+- Emit exactly one YAML object — plain YAML or a single ```yaml fenced block — with no prose before or after it.
+- Keep the field names, enums, and required fields exactly as shown.
+
 ```yaml
-verdict: APPROVE | REJECT
+verdict: APPROVE        # APPROVE | REJECT
 acceptance_checked:
-  - { id: <criterion>, status: met | unmet, evidence: <file:line or test name or "none found"> }
+  - id: "<criterion>"
+    status: met         # met | unmet
+    evidence: "<file:line or test name or 'none found'>"
 findings:
-  - { severity: blocker | major | minor | nit, claim: <what was asserted>, reality: <what you found>, evidence: <pointer> }
-missing_proof: [<criterion or claim with no evidence>]
-risk_level: low | medium | high | critical
+  - severity: minor     # blocker | major | minor | nit
+    claim: "<what was asserted>"
+    reality: "<what you found>"
+    evidence: "<pointer>"
+missing_proof: []       # list of criteria or claims with no evidence
+risk_level: low         # low | medium | high | critical
 ```
 
 ## Anti-theater rules

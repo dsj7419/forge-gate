@@ -31,13 +31,20 @@ whether the work is genuinely done, what to correct, or when to escalate to the 
 
 ## Output (emit this YAML)
 Your final response must be **exactly one YAML object** — either as plain YAML or inside a single ```yaml fenced block — with no prose before or after it.
+
+**YAML-output rules (follow exactly — Core's parser is strict and will reject malformed output):**
+- Use block-style YAML mappings: one key per line. Do **not** use inline flow mappings (`{ ... }`) for object lists; write the `instructions` list as block `-` entries, one per line.
+- Quote every string value that contains a comma, colon, slash, bracket, brace, parenthesis, or `#`. A `rationale` or `journal_entry` sentence with punctuation **must** be quoted.
+- Emit exactly one YAML object — plain YAML or a single ```yaml fenced block — with no prose before or after it.
+- Keep the field names, enums, and required fields exactly as shown.
+
 ```yaml
-decision: PASS | CORRECT | ESCALATE
-rationale: <why, referencing the verifier findings and evidence>
-instructions: [<precise, bounded fix>]   # present iff CORRECT
-decision_id: D-<nnn>
-journal_entry: <one-line append for JOURNAL.md>
-human_gate_required: true | false   # MUST equal the dispatch's "Effective gate (authoritative)" value — derived from the ticket gate, never inferred (gate: none → false; pr/merge/phase/manual → true)
+decision: PASS          # PASS | CORRECT | ESCALATE
+rationale: "<why, referencing the verifier findings and evidence>"
+instructions: []        # present (non-empty) iff CORRECT; list of precise, bounded fixes
+decision_id: D-001      # D-<nnn>
+journal_entry: "<one-line append for JOURNAL.md>"
+human_gate_required: true   # true | false — MUST equal the dispatch's "Effective gate (authoritative)" value, derived from the ticket gate, never inferred (gate: none → false; pr/merge/phase/manual → true)
 ```
 
 ## Anti-theater rules
