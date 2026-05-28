@@ -1,0 +1,8 @@
+schema_version: 1
+id: forge-run-report-core-owned
+title: ForgeGate — Core-owned forge-run-report/v1 writer
+sprints:
+  - sprint-01-runtime-evidence-writer
+gate_policy:
+  default_push: human
+  default_merge: human
