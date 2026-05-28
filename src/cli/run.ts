@@ -51,7 +51,7 @@ const USAGE =
   "       forge parse-agent <role> (--file <path> | --stdin) [--expected-decision-id <D-NNN> (pm only)]\n" +
   "       forge active-ticket <epic-path> [--json] [--repo-root <path>]\n" +
   "       forge guard paths [--active <active-ticket.json>] [--json] [--repo-root <path>]\n" +
-  "       forge run-report write <epic-path> --repo-root <p> --result PASS|ESCALATE --ticket-title <s> --checkpoint-base <sha> --checkpoint-head <sha> --guard-result <s> --guard-exit <n> [--engineer-output <p>] [--semantic-output <p>] [--scope-output <p>] [--pm-output <p>] [--facts <p>] [--active-ticket <p>] [--out <p>] [--proposed-status-transition <s>] [--suggested-commit-message <s>] [--suggested-command <s>] [--note <s>]\n" +
+  "       forge run-report write <epic-path> --repo-root <p> --result PASS|ESCALATE --ticket-title <s> --checkpoint-base <sha> --checkpoint-head <sha> --guard-result <s> --guard-exit <n> --gate-declared <g> --gate-effective <g> --gate-human-required <true|false> [--engineer-output <p>] [--semantic-output <p>] [--scope-output <p>] [--pm-output <p>] [--facts <p>] [--active-ticket <p>] [--out <p>] [--proposed-status-transition <s>] [--suggested-commit-message <s>] [--suggested-command <s>] [--note <s>]\n" +
   "       forge verify-install";
 
 export function runCli(argv: string[], io: CliIo, options: RunCliOptions = {}): number {

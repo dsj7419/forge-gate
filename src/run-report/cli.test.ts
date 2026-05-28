@@ -142,6 +142,14 @@ const baseArgs = [
   "OK",
   "--guard-exit",
   "0",
+  // Authoritative gate flags from the orchestrator's Core-derived dry-run/packets state.
+  // Matches PM_YAML's human_gate_required: true; mismatches surface as HUMAN_GATE_MISMATCH.
+  "--gate-declared",
+  "pr",
+  "--gate-effective",
+  "pr",
+  "--gate-human-required",
+  "true",
 ];
 
 describe("forge run-report write — default paths", () => {
@@ -282,15 +290,36 @@ describe("forge run-report write — safety: only writes the single artifact", (
     }
   });
 
-  test("a custom --out outside <epic>/.forge/ is rejected (exit 2)", () => {
-    const { cli, reportIo, err } = makeIo();
+  test("a custom --out outside <epic>/.forge/ is rejected (exit 1, OUT_PATH_OUTSIDE_FORGE)", () => {
+    const { cli, reportIo, out } = makeIo();
     const code = runWriteRunReport(
       [...baseArgs, "--out", "/somewhere/else/report.json"],
       cli,
       reportIo,
     );
-    expect(code).toBe(2);
-    expect(err.join("\n")).toMatch(/\.forge\//i);
+    expect(code).toBe(1);
+    const parsed = JSON.parse(out.join("\n")) as { code: string };
+    expect(parsed.code).toBe("OUT_PATH_OUTSIDE_FORGE");
+  });
+
+  test("--out with `..` traversal is rejected (exit 1, OUT_PATH_OUTSIDE_FORGE) — resolved-path containment", () => {
+    const { cli, reportIo, out, writes } = makeIo();
+    // String prefix check passes (it does start with `<FORGE>/`), but the
+    // resolved path escapes the .forge directory. The fix must catch this.
+    const traversalOut = path.posix.join(FORGE, "..", "..", "outside.json");
+    const code = runWriteRunReport([...baseArgs, "--out", traversalOut], cli, reportIo);
+    expect(code).toBe(1);
+    const parsed = JSON.parse(out.join("\n")) as { code: string };
+    expect(parsed.code).toBe("OUT_PATH_OUTSIDE_FORGE");
+    expect(writes).toEqual([]); // no write to any path
+  });
+
+  test("--out equal to the .forge directory itself is rejected (cannot write a file at the dir path)", () => {
+    const { cli, reportIo, out } = makeIo();
+    const code = runWriteRunReport([...baseArgs, "--out", FORGE], cli, reportIo);
+    expect(code).toBe(1);
+    const parsed = JSON.parse(out.join("\n")) as { code: string };
+    expect(parsed.code).toBe("OUT_PATH_OUTSIDE_FORGE");
   });
 });
 
@@ -324,6 +353,12 @@ describe("forge run-report write — ESCALATE result", () => {
       "OK",
       "--guard-exit",
       "0",
+      "--gate-declared",
+      "pr",
+      "--gate-effective",
+      "pr",
+      "--gate-human-required",
+      "true",
       "--note",
       "verifier REJECT, escalating per PM",
     ];
@@ -337,6 +372,84 @@ describe("forge run-report write — ESCALATE result", () => {
     };
     expect(parsed.result).toBe("ESCALATE");
     expect(parsed.notes).toEqual(["verifier REJECT, escalating per PM"]);
+  });
+});
+
+describe("forge run-report write — authoritative gate cross-check (HUMAN_GATE_MISMATCH)", () => {
+  // The assembler check is real only when the CLI takes the gate from the
+  // orchestrator (not from the PM output). These tests prove the cross-check
+  // is reachable through the CLI, not just through the assembler unit tests.
+
+  test("PM emits human_gate_required:false but --gate-human-required true → HUMAN_GATE_MISMATCH (exit 1)", () => {
+    const fs = defaultFs();
+    fs[defaultPaths.pm] = PM_YAML.replace("human_gate_required: true", "human_gate_required: false");
+    const { cli, reportIo, out, writes } = makeIo(fs);
+    // baseArgs pins --gate-human-required true; PM disagrees.
+    const code = runWriteRunReport(baseArgs, cli, reportIo);
+    expect(code).toBe(1);
+    const parsed = JSON.parse(out.join("\n")) as { code: string };
+    expect(parsed.code).toBe("HUMAN_GATE_MISMATCH");
+    expect(writes).toEqual([]); // mismatch must not produce a written report
+  });
+
+  test("PM emits human_gate_required:true but --gate-human-required false → HUMAN_GATE_MISMATCH (exit 1)", () => {
+    // Symmetric direction: PM says human-required, orchestrator says not.
+    const argsWithFalseGate = baseArgs.map((arg, index) => {
+      if (index > 0 && baseArgs[index - 1] === "--gate-human-required") return "false";
+      return arg;
+    });
+    const { cli, reportIo, out } = makeIo();
+    const code = runWriteRunReport(argsWithFalseGate, cli, reportIo);
+    expect(code).toBe(1);
+    const parsed = JSON.parse(out.join("\n")) as { code: string };
+    expect(parsed.code).toBe("HUMAN_GATE_MISMATCH");
+  });
+
+  test("matching authoritative gate and PM emission → success", () => {
+    // The default test path: PM_YAML says human_gate_required:true and
+    // baseArgs says --gate-human-required true. The cross-check must NOT
+    // fire and a report must be written.
+    const { cli, reportIo, writes } = makeIo();
+    const code = runWriteRunReport(baseArgs, cli, reportIo);
+    expect(code).toBe(0);
+    expect(writes).toHaveLength(1);
+  });
+});
+
+describe("forge run-report write — gate flag validation", () => {
+  test("missing --gate-human-required surfaces a usage error (exit 2)", () => {
+    const argsWithoutGateHR = baseArgs.filter((arg, index) => {
+      if (arg === "--gate-human-required") return false;
+      if (index > 0 && baseArgs[index - 1] === "--gate-human-required") return false;
+      return true;
+    });
+    const { cli, reportIo, err } = makeIo();
+    const code = runWriteRunReport(argsWithoutGateHR, cli, reportIo);
+    expect(code).toBe(2);
+    expect(err.join("\n")).toMatch(/gate-human-required|gate/i);
+  });
+
+  test("missing --gate-declared surfaces a usage error (exit 2)", () => {
+    const argsWithoutGateDeclared = baseArgs.filter((arg, index) => {
+      if (arg === "--gate-declared") return false;
+      if (index > 0 && baseArgs[index - 1] === "--gate-declared") return false;
+      return true;
+    });
+    const { cli, reportIo, err } = makeIo();
+    const code = runWriteRunReport(argsWithoutGateDeclared, cli, reportIo);
+    expect(code).toBe(2);
+    expect(err.join("\n")).toMatch(/gate-declared|gate/i);
+  });
+
+  test("--gate-human-required other than true|false surfaces a usage error (exit 2)", () => {
+    const argsWithBadGate = baseArgs.map((arg, index) => {
+      if (index > 0 && baseArgs[index - 1] === "--gate-human-required") return "maybe";
+      return arg;
+    });
+    const { cli, reportIo, err } = makeIo();
+    const code = runWriteRunReport(argsWithBadGate, cli, reportIo);
+    expect(code).toBe(2);
+    expect(err.join("\n")).toMatch(/true|false/i);
   });
 });
 

@@ -39,7 +39,10 @@ Only writes allowed: a branch ref, the engineer's `allowed_paths` edits, and git
    the tree is dirty → STOP (`DIRTY_TREE`), ask the human. Check `$EPIC/.forge/lock.json` — if present →
    STOP (`LOCK_EXISTS`), show recovery (`rm` the lock if stale by pid/age); never overwrite silently.
 2. **Packets:** `$FORGE packets "$EPIC" --repo-root "$TARGET_REPO"` → the packet set (pins absolute `repo_root`
-   = `$TARGET_REPO` + cwd discipline). Record the selected ticket, branch, allowed/forbidden paths.
+   = `$TARGET_REPO` + cwd discipline). Record the selected ticket, branch, allowed/forbidden paths, **and the
+   Core-derived effective gate** — `active_run.gate.{declared, effective, human_required}` — captured as
+   `$GATE_DECLARED`, `$GATE_EFFECTIVE`, `$GATE_HUMAN_REQUIRED` for use in step 10/11. These are the
+   authoritative gate values the run-report writer cross-checks against the PM's emitted `human_gate_required`.
 3. **Lock + checkpoint:** write `$EPIC/.forge/lock.json` (`{session_id, command, epic_path, ticket, branch, repo_root,
    pid, started_at}`). Emit the active-ticket contract **deterministically from Core** — do **not** hand-author
    its shape — `$FORGE active-ticket "$EPIC" --json --repo-root "$TARGET_REPO" > "$EPIC/.forge/active-ticket.json"`.
@@ -110,20 +113,26 @@ Only writes allowed: a branch ref, the engineer's `allowed_paths` edits, and git
     `z.literal(false)`), and emits a deterministic, byte-identical artifact per inputs:
     `$FORGE run-report write "$EPIC" --repo-root "$TARGET_REPO" --result PASS --ticket-title "<title>"
     --checkpoint-base "$BASE_SHA" --checkpoint-head "$HEAD_SHA" --guard-result "$GUARD_RESULT"
-    --guard-exit "$GUARD_EXIT" [--proposed-status-transition …] [--suggested-commit-message …]
-    [--suggested-command …] [--note …]`. The file inputs (engineer/semantic/scope/pm outputs,
+    --guard-exit "$GUARD_EXIT" --gate-declared "$GATE_DECLARED" --gate-effective "$GATE_EFFECTIVE"
+    --gate-human-required "$GATE_HUMAN_REQUIRED" [--proposed-status-transition …]
+    [--suggested-commit-message …] [--suggested-command …] [--note …]`. The gate flags are the authoritative
+    Core-derived values captured in step 2 — the writer cross-checks the PM's emitted `human_gate_required`
+    against `$GATE_HUMAN_REQUIRED` (`HUMAN_GATE_MISMATCH` on disagreement, so the orchestrator-supplied gate
+    cannot be self-validated by the PM emission). The file inputs (engineer/semantic/scope/pm outputs,
     orchestrator-facts, active-ticket) default to the canonical `$EPIC/.forge/<name>` paths the orchestrator
-    already captured to in earlier steps; `--out` defaults to `$EPIC/.forge/run-report.json`. If Core returns
-    a typed failure (`AGENT_OUTPUT_INVALID`, `FACTS_INVALID`, `ACTIVE_TICKET_INVALID`, `HUMAN_GATE_MISMATCH`,
-    `RESULT_REQUIRES_GREEN`, `RUN_REPORT_INVALID`) → ESCALATE; do **not** invent or repair the report.
-    Release `$EPIC/.forge/lock.json`. Print the handoff: changed files, verification summary, PM decision,
-    **proposed** status transition (`<ticket> pending → ready_for_pr`, not applied), a suggested commit
-    message, and the exact suggested `git add`/`git commit` command. **Do NOT commit.** Stop.
+    already captured to in earlier steps; `--out` defaults to `$EPIC/.forge/run-report.json` and is fenced by
+    resolved-path containment (`--out` outside `.forge/` → `OUT_PATH_OUTSIDE_FORGE`). If Core returns a typed
+    failure (`AGENT_OUTPUT_INVALID`, `FACTS_INVALID`, `ACTIVE_TICKET_INVALID`, `HUMAN_GATE_MISMATCH`,
+    `RESULT_REQUIRES_GREEN`, `RUN_REPORT_INVALID`, `OUT_PATH_OUTSIDE_FORGE`) → ESCALATE; do **not** invent or
+    repair the report. Release `$EPIC/.forge/lock.json`. Print the handoff: changed files, verification
+    summary, PM decision, **proposed** status transition (`<ticket> pending → ready_for_pr`, not applied), a
+    suggested commit message, and the exact suggested `git add`/`git commit` command. **Do NOT commit.** Stop.
 11. **Failure (preserve evidence):** invoke Core to write the evidence run-report —
     `$FORGE run-report write "$EPIC" --repo-root "$TARGET_REPO" --result ESCALATE --ticket-title "<title>"
     --checkpoint-base "$BASE_SHA" --checkpoint-head "$HEAD_SHA" --guard-result "$GUARD_RESULT"
-    --guard-exit "$GUARD_EXIT" [--note …]` (same defaults as step 10; `result: "ESCALATE"` is accepted
-    regardless of verifier/PM outcome, so the artifact records the terminal failure faithfully). Release
-    the lock; produce a recovery brief (failure code, decision, changed files, checkpoint HEAD, branch,
-    commands, verify results, scope findings, **suggested** cleanup/rollback commands — shown, not
-    executed). Leave the branch + working tree intact. Ask the human. Auto-clean only the lock.
+    --guard-exit "$GUARD_EXIT" --gate-declared "$GATE_DECLARED" --gate-effective "$GATE_EFFECTIVE"
+    --gate-human-required "$GATE_HUMAN_REQUIRED" [--note …]` (same defaults and fences as step 10;
+    `result: "ESCALATE"` is accepted regardless of verifier/PM outcome, so the artifact records the terminal
+    failure faithfully). Release the lock; produce a recovery brief (failure code, decision, changed files,
+    checkpoint HEAD, branch, commands, verify results, scope findings, **suggested** cleanup/rollback commands
+    — shown, not executed). Leave the branch + working tree intact. Ask the human. Auto-clean only the lock.

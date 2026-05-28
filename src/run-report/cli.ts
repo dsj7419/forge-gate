@@ -21,6 +21,9 @@ const USAGE =
   "         --checkpoint-head <sha>\n" +
   "         --guard-result <string>\n" +
   "         --guard-exit <int>\n" +
+  "         --gate-declared <none|pr|merge|phase|manual>\n" +
+  "         --gate-effective <none|pr|merge|phase|manual>\n" +
+  "         --gate-human-required <true|false>\n" +
   "         [--engineer-output <path>] [--semantic-output <path>] [--scope-output <path>]\n" +
   "         [--pm-output <path>] [--facts <path>] [--active-ticket <path>]\n" +
   "         [--out <path>]\n" +
@@ -62,6 +65,9 @@ const KNOWN_FLAGS = new Set([
   "--checkpoint-head",
   "--guard-result",
   "--guard-exit",
+  "--gate-declared",
+  "--gate-effective",
+  "--gate-human-required",
   "--engineer-output",
   "--semantic-output",
   "--scope-output",
@@ -83,7 +89,8 @@ type FailureCode =
   | "HUMAN_GATE_MISMATCH"
   | "SAFETY_INVARIANT_VIOLATION"
   | "RESULT_REQUIRES_GREEN"
-  | "RUN_REPORT_INVALID";
+  | "RUN_REPORT_INVALID"
+  | "OUT_PATH_OUTSIDE_FORGE";
 
 /**
  * `forge run-report write <epic-path>` — the Core-owned writer for
@@ -116,6 +123,14 @@ export function runWriteRunReport(args: string[], cli: CliIo, io: RunReportIo): 
   const checkpointHead = flagValue(rest, "--checkpoint-head");
   const guardResult = flagValue(rest, "--guard-result");
   const guardExitRaw = flagValue(rest, "--guard-exit");
+  // Authoritative effective-gate flags supplied by the orchestrator from the
+  // Core-derived dry-run/packets state. The assembler's HUMAN_GATE_MISMATCH
+  // check compares pm-output's `human_gate_required` against the value pinned
+  // here; deriving it from the PM output itself would make the check
+  // tautological.
+  const gateDeclared = flagValue(rest, "--gate-declared");
+  const gateEffective = flagValue(rest, "--gate-effective");
+  const gateHumanRequiredRaw = flagValue(rest, "--gate-human-required");
 
   if (
     repoRoot === undefined ||
@@ -124,11 +139,14 @@ export function runWriteRunReport(args: string[], cli: CliIo, io: RunReportIo): 
     checkpointBase === undefined ||
     checkpointHead === undefined ||
     guardResult === undefined ||
-    guardExitRaw === undefined
+    guardExitRaw === undefined ||
+    gateDeclared === undefined ||
+    gateEffective === undefined ||
+    gateHumanRequiredRaw === undefined
   ) {
     return usage(
       cli,
-      "run-report write requires --repo-root, --result, --ticket-title, --checkpoint-base, --checkpoint-head, --guard-result, --guard-exit",
+      "run-report write requires --repo-root, --result, --ticket-title, --checkpoint-base, --checkpoint-head, --guard-result, --guard-exit, --gate-declared, --gate-effective, --gate-human-required",
     );
   }
 
@@ -139,6 +157,13 @@ export function runWriteRunReport(args: string[], cli: CliIo, io: RunReportIo): 
   if (!Number.isInteger(guardExit)) {
     return usage(cli, `--guard-exit must be an integer; got ${JSON.stringify(guardExitRaw)}`);
   }
+  if (gateHumanRequiredRaw !== "true" && gateHumanRequiredRaw !== "false") {
+    return usage(
+      cli,
+      `--gate-human-required must be true or false; got ${JSON.stringify(gateHumanRequiredRaw)}`,
+    );
+  }
+  const gateHumanRequired = gateHumanRequiredRaw === "true";
 
   const forgeDir = joinForge(epicPath);
   const inputs = {
@@ -153,9 +178,12 @@ export function runWriteRunReport(args: string[], cli: CliIo, io: RunReportIo): 
 
   // Hard fence: writes only ever go into <epic>/.forge/. This mirrors the
   // orchestrator's v1 hard constraint that the only runtime-state writes are
-  // gitignored .forge/ files.
+  // gitignored .forge/ files. Uses resolved-path containment so a crafted
+  // `<epic>/.forge/../../outside.json` cannot escape via string-prefix bypass.
   if (!isInsideForgeDir(outPath, forgeDir)) {
-    return usage(cli, `--out must be inside ${forgeDir}/`);
+    return fail(cli, "OUT_PATH_OUTSIDE_FORGE", [
+      `--out must resolve to a path strictly inside ${forgeDir}/; got ${outPath}`,
+    ]);
   }
 
   // Load + parse every input through the seam. A missing file is MISSING_INPUT
@@ -203,19 +231,21 @@ export function runWriteRunReport(args: string[], cli: CliIo, io: RunReportIo): 
     return fail(cli, "ACTIVE_TICKET_INVALID", [activeParsed.message]);
   }
 
-  // Effective gate cross-check input: the orchestrator's effective gate
-  // mirrors `active_run.gate` — for the writer it is derived from the PM's
-  // `human_gate_required` flag, which v1 already pins to the human-gate value.
-  // The cross-check inside the assembler catches drift.
+  // Effective-gate cross-check input: the orchestrator supplies the
+  // authoritative gate (Core-derived from the active run / packets / dry-run),
+  // and the assembler verifies the PM emission's `human_gate_required` matches
+  // it. Deriving the gate from the PM output here would make
+  // `HUMAN_GATE_MISMATCH` tautological — see the engineer-flagged risk noted
+  // in PR #6's review.
   const commitGate = collectCommitGateMaterials(rest);
   const notes = collectNotes(rest);
   const runtime: RuntimeMetadata = {
     result,
     ticket_title: ticketTitle,
     effective_gate: {
-      declared: "pr",
-      effective: "pr",
-      human_required: pmParsed.data.human_gate_required,
+      declared: gateDeclared,
+      effective: gateEffective,
+      human_required: gateHumanRequired,
     },
     checkpoint: { base: checkpointBase, head: checkpointHead },
     guard: { result: guardResult, exit: guardExit },
@@ -325,9 +355,16 @@ function normalize(value: string): string {
 }
 
 function isInsideForgeDir(outPath: string, forgeDir: string): boolean {
-  const normOut = normalize(outPath);
-  const normDir = normalize(forgeDir).replace(/\/$/, "");
-  return normOut === `${normDir}/run-report.json` || normOut.startsWith(`${normDir}/`);
+  // Resolved-path containment. A simple string-prefix check passes for crafted
+  // paths like `<forgeDir>/../../outside.json` (which starts with `<forgeDir>/`
+  // as a string but escapes the directory on resolution); using
+  // `path.relative` over resolved paths reduces that to a `..`-prefixed
+  // relative path that we reject.
+  const resolvedOut = path.resolve(outPath);
+  const resolvedDir = path.resolve(forgeDir);
+  if (resolvedOut === resolvedDir) return false; // writing the dir itself, not a file inside
+  const relative = path.relative(resolvedDir, resolvedOut);
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
 function isErrno(value: unknown): value is NodeJS.ErrnoException {
