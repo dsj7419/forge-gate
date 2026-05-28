@@ -37,9 +37,9 @@ const USAGE =
   "       forge run <epic-path> --dry-run [--json]\n" +
   "       forge import --from-existing <legacy-sprint-path> --out <epic-root> [--dry-run] [--json]\n" +
   "       forge packets <epic-path> [--repo-root <path>]\n" +
-  "       forge dispatch <engineer|semantic-verifier|scope-verifier|pm> <epic-path> [--repo-root <path>]\n" +
-  "       forge dispatch pm <epic-path> --engineer-output <f> --semantic-output <f> --scope-output <f> --facts <f.json> [--repo-root <path>]\n" +
-  "       forge parse-agent <role> (--file <path> | --stdin)\n" +
+  "       forge dispatch <engineer|semantic-verifier|scope-verifier> <epic-path> [--repo-root <path>]\n" +
+  "       forge dispatch pm <epic-path> --assigned-decision-id <D-NNN> [--engineer-output <f> --semantic-output <f> --scope-output <f> --facts <f.json>] [--repo-root <path>]\n" +
+  "       forge parse-agent <role> (--file <path> | --stdin) [--expected-decision-id <D-NNN> (pm only)]\n" +
   "       forge active-ticket <epic-path> [--json] [--repo-root <path>]\n" +
   "       forge guard paths [--active <active-ticket.json>] [--json] [--repo-root <path>]\n" +
   "       forge verify-install";
@@ -93,12 +93,49 @@ export function runCli(argv: string[], io: CliIo): number {
       scope: flagValue(rest, "--scope-output"),
       facts: flagValue(rest, "--facts"),
     };
+    const assignedDecisionId = flagValue(rest, "--assigned-decision-id");
     const anyPmInput = Object.values(pmInputs).some((value) => value !== undefined);
     if (anyPmInput && role !== "pm") {
       return usageError(io, "agent-output inputs are only valid for `dispatch pm`");
     }
+    if (assignedDecisionId !== undefined && role !== "pm") {
+      return usageError(io, "--assigned-decision-id is only valid for `dispatch pm`");
+    }
     if (anyPmInput && Object.values(pmInputs).some((value) => value === undefined)) {
       return usageError(io, "dispatch pm input assembly requires --engineer-output, --semantic-output, --scope-output, and --facts");
+    }
+    // `dispatch pm` is the orchestrator's path to a Core-pinned monotonic decision id; the
+    // flag is therefore required for the pm role (even without assembled agent inputs) so
+    // the assigned id is always rendered into the PM packet skeleton.
+    if (role === "pm" && assignedDecisionId === undefined) {
+      io.print(
+        JSON.stringify(
+          {
+            ok: false,
+            code: "ASSIGNED_DECISION_ID_REQUIRED",
+            source: "assigned_decision_id",
+            errors: ["`forge dispatch pm` requires --assigned-decision-id <D-NNN> (Core-pinned by the orchestrator)"],
+          },
+          null,
+          2,
+        ),
+      );
+      return 1;
+    }
+    if (assignedDecisionId !== undefined && !ASSIGNED_DECISION_ID_PATTERN.test(assignedDecisionId)) {
+      io.print(
+        JSON.stringify(
+          {
+            ok: false,
+            code: "ASSIGNED_DECISION_ID_REQUIRED",
+            source: "assigned_decision_id",
+            errors: [`--assigned-decision-id must match D-<digits>; got ${JSON.stringify(assignedDecisionId)}`],
+          },
+          null,
+          2,
+        ),
+      );
+      return 1;
     }
 
     const result = generateRunPackets(dispatchEpic, flagValue(rest, "--repo-root") ?? process.cwd());
@@ -116,6 +153,7 @@ export function runCli(argv: string[], io: CliIo): number {
           semantic: fs.readFileSync(pmInputs.semantic as string, "utf8"),
           scope: fs.readFileSync(pmInputs.scope as string, "utf8"),
           facts: fs.readFileSync(pmInputs.facts as string, "utf8"),
+          assignedDecisionId: assignedDecisionId as string,
         };
       } catch (thrown) {
         const error = thrown instanceof Error ? thrown.message : String(thrown);
@@ -128,6 +166,22 @@ export function runCli(argv: string[], io: CliIo): number {
         return 1;
       }
       io.print(JSON.stringify(pm.dispatch, null, 2));
+      return 0;
+    }
+
+    // PM skeleton dispatch (no assembled inputs yet) — Core still pins the
+    // assigned id into the rendered packet so the prompt carries the
+    // authoritative section even before the upstream outputs are gathered.
+    if (role === "pm") {
+      const packetsWithId = {
+        ...result.packets,
+        pm: {
+          ...result.packets.pm,
+          inputs: { ...result.packets.pm.inputs, assigned_decision_id: assignedDecisionId as string },
+        },
+      };
+      const dispatch = buildAgentDispatch(role, packetsWithId, options);
+      io.print(JSON.stringify(dispatch, null, 2));
       return 0;
     }
 
@@ -160,6 +214,14 @@ export function runCli(argv: string[], io: CliIo): number {
   if (command === "parse-agent") {
     const role = epicPath; // argv[1]
     if (!isAgentRole(role)) return usageError(io, "parse-agent requires a valid <role>");
+    const unknown = flags.filter((flag) => flag.startsWith("--") && !PARSE_AGENT_FLAGS.has(flag));
+    if (unknown.length > 0) return usageError(io, `unknown option(s): ${unknown.join(", ")}`);
+
+    const expectedDecisionId = flagValue(flags, "--expected-decision-id");
+    if (expectedDecisionId !== undefined && role !== "pm") {
+      return usageError(io, "--expected-decision-id is only valid for `parse-agent pm`");
+    }
+
     const fileIndex = flags.indexOf("--file");
     let raw: string;
     if (fileIndex !== -1) {
@@ -172,6 +234,32 @@ export function runCli(argv: string[], io: CliIo): number {
       return usageError(io, "parse-agent requires --file <path> or --stdin");
     }
     const result = parseAgentOutput(role, raw);
+    // Post-validation cross-check: after the strict schema parse, if the caller
+    // pinned an expected decision_id (Core-assigned monotonically from the
+    // ledger), the emitted value must equal it verbatim. The schema is *not*
+    // changed for this — it is a CLI-layer guard so the PM agent cannot
+    // silently invent or renumber the id.
+    if (result.ok && role === "pm" && expectedDecisionId !== undefined) {
+      const emitted = (result.data as { decision_id: string }).decision_id;
+      if (emitted !== expectedDecisionId) {
+        io.print(
+          JSON.stringify(
+            {
+              ok: false,
+              code: "DECISION_ID_MISMATCH",
+              expected: expectedDecisionId,
+              actual: emitted,
+              errors: [
+                `pm emitted decision_id ${JSON.stringify(emitted)} but Core pinned ${JSON.stringify(expectedDecisionId)}`,
+              ],
+            },
+            null,
+            2,
+          ),
+        );
+        return 1;
+      }
+    }
     io.print(JSON.stringify(result, null, 2));
     return result.ok ? 0 : 1;
   }
@@ -192,7 +280,17 @@ export function runCli(argv: string[], io: CliIo): number {
 }
 
 const IMPORT_FLAGS = new Set(["--from-existing", "--out", "--dry-run", "--json"]);
-const DISPATCH_FLAGS = new Set(["--engineer-output", "--semantic-output", "--scope-output", "--facts", "--json", "--repo-root"]);
+const DISPATCH_FLAGS = new Set([
+  "--engineer-output",
+  "--semantic-output",
+  "--scope-output",
+  "--facts",
+  "--assigned-decision-id",
+  "--json",
+  "--repo-root",
+]);
+const PARSE_AGENT_FLAGS = new Set(["--file", "--stdin", "--expected-decision-id"]);
+const ASSIGNED_DECISION_ID_PATTERN = /^D-\d+$/;
 
 function flagValue(args: string[], flag: string): string | undefined {
   const index = args.indexOf(flag);

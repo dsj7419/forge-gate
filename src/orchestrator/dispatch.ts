@@ -102,6 +102,9 @@ function renderContext(role: AgentRole, packets: RunPacketSet): string {
       const p = packets.pm;
       const i = p.inputs;
       const lines = [...renderCommon(p)];
+      if (i.assigned_decision_id !== null) {
+        lines.push("", ...renderAssignedDecisionId(i.assigned_decision_id));
+      }
       if (
         i.engineer_output !== null &&
         i.semantic_verifier_output !== null &&
@@ -123,6 +126,20 @@ function renderContext(role: AgentRole, packets: RunPacketSet): string {
       return [...lines, "", "## Task", roleTask(role, packets)].join("\n");
     }
   }
+}
+
+/**
+ * Render the Core-pinned `decision_id` as an authoritative dispatch section.
+ *
+ * Modeled on the "Effective gate (authoritative …)" section: same authority,
+ * same pin-and-echo contract — the PM agent reads this value from the dispatch
+ * packet and emits it verbatim, never inventing or renumbering.
+ */
+function renderAssignedDecisionId(assignedDecisionId: string): string[] {
+  return [
+    "## Assigned decision_id (authoritative — use verbatim, never invent)",
+    `- decision_id: ${assignedDecisionId}`,
+  ];
 }
 
 /** Render the assembled, Core-validated PM inputs (the original structures, plus confirmed facts). */
@@ -199,11 +216,24 @@ export type PmRawInputs = {
   scope: string;
   /** Raw orchestrator-confirmed facts (JSON). */
   facts: string;
+  /**
+   * The Core-pinned monotonic decision id (e.g. `D-001`) the orchestrator
+   * computed from `$EPIC/.forge/decisions-ledger.json` before dispatching the
+   * PM. Required: `buildPmDispatch` fails closed if absent or malformed.
+   */
+  assignedDecisionId: string;
 };
+
+const ASSIGNED_DECISION_ID_PATTERN = /^D-\d+$/;
 
 export type BuildPmDispatchResult =
   | { ok: true; dispatch: AgentDispatch }
-  | { ok: false; code: "AGENT_OUTPUT_INVALID" | "FACTS_INVALID"; source: AgentRole | "facts"; errors: string[] };
+  | {
+      ok: false;
+      code: "AGENT_OUTPUT_INVALID" | "FACTS_INVALID" | "ASSIGNED_DECISION_ID_REQUIRED";
+      source: AgentRole | "facts" | "assigned_decision_id";
+      errors: string[];
+    };
 
 /**
  * Deterministically assemble the PM dispatch from the upstream agent outputs and the
@@ -218,6 +248,15 @@ export function buildPmDispatch(
   raw: PmRawInputs,
   options: BuildAgentDispatchOptions,
 ): BuildPmDispatchResult {
+  if (typeof raw.assignedDecisionId !== "string" || !ASSIGNED_DECISION_ID_PATTERN.test(raw.assignedDecisionId)) {
+    return {
+      ok: false,
+      code: "ASSIGNED_DECISION_ID_REQUIRED",
+      source: "assigned_decision_id",
+      errors: ["assignedDecisionId must be a Core-pinned id matching D-<digits> (e.g. D-001)"],
+    };
+  }
+
   const engineer = parseAgentOutput("engineer", raw.engineer);
   if (!engineer.ok) return { ok: false, code: "AGENT_OUTPUT_INVALID", source: "engineer", errors: engineer.errors };
 
@@ -248,6 +287,7 @@ export function buildPmDispatch(
         semantic_verifier_output: semantic.data,
         scope_verifier_output: scope.data,
         orchestrator_confirmed_facts: facts.data,
+        assigned_decision_id: raw.assignedDecisionId,
       },
     },
   };

@@ -105,6 +105,13 @@ export type PMPacket = PacketCommon & {
     semantic_verifier_output: SemanticVerifierOutput | null;
     scope_verifier_output: ScopeVerifierOutput | null;
     orchestrator_confirmed_facts: OrchestratorConfirmedFacts | null;
+    /**
+     * The Core-pinned, monotonic PM decision id (e.g. `D-001`). `null` in the
+     * skeleton from `generateRunPackets`; filled at dispatch time by
+     * `buildPmDispatch` from the `--assigned-decision-id` flag. The PM agent
+     * MUST echo this value verbatim — it never invents one.
+     */
+    assigned_decision_id: string | null;
   };
   known_harness_limitations: string[];
 };
@@ -209,6 +216,7 @@ export function generateRunPackets(epicPath: string, repoRoot: string): Generate
         semantic_verifier_output: null,
         scope_verifier_output: null,
         orchestrator_confirmed_facts: null,
+        assigned_decision_id: null,
       },
       known_harness_limitations: [...KNOWN_HARNESS_LIMITATIONS],
     },

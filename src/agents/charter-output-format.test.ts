@@ -97,6 +97,30 @@ describe("agent charters — example uses block style for object lists", () => {
   }
 });
 
+describe("pm charter — Core-pinned decision_id pin-and-echo rule", () => {
+  test("forge-pm.md states the decision_id is read verbatim from the dispatch packet (never invented)", () => {
+    const md = readCharter("forge-pm");
+    const lower = md.toLowerCase();
+    // The new authoritative-section name from dispatch.ts (verbatim) is referenced.
+    expect(md).toContain("## Assigned decision_id (authoritative");
+    // "verbatim" is the operative word; emit it as-is.
+    expect(lower).toContain("verbatim");
+    // The agent must not invent or renumber the id.
+    expect(lower).toContain("never invent");
+    // Pin-and-echo lives alongside the human_gate_required rule.
+    expect(lower).toContain("human_gate_required");
+  });
+
+  test("forge-pm.md's example shows the pinned placeholder, not a hard-coded D-001", () => {
+    const blocks = fencedYamlBlocks(readCharter("forge-pm"));
+    const example = blocks.find((b) => b.includes("decision_id:"));
+    expect(example).toBeDefined();
+    if (example === undefined) return;
+    expect(example).toMatch(/decision_id:\s*<pinned>/);
+    expect(example).toContain("never invent");
+  });
+});
+
 describe("semantic-verifier charter — acceptance_checked example shape", () => {
   test("acceptance_checked is shown in block style with id/status/evidence on separate lines", () => {
     const blocks = fencedYamlBlocks(readCharter("forge-semantic-verifier"));

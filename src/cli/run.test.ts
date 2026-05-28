@@ -321,6 +321,67 @@ describe("runCli orchestration subcommands (read-only)", () => {
   });
 });
 
+describe("runCli parse-agent pm — Core-pinned decision_id cross-check", () => {
+  const pmBlockWith = (id: string): string =>
+    `\`\`\`yaml\ndecision: PASS\nrationale: ok\ndecision_id: ${id}\njournal_entry: x\nhuman_gate_required: true\n\`\`\`\n`;
+
+  function writePmFile(contents: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-parse-pm-"));
+    cliTempDirs.push(dir);
+    const file = path.join(dir, "pm.yaml");
+    fs.writeFileSync(file, contents);
+    return file;
+  }
+
+  test("matching --expected-decision-id passes (exit 0, ok:true)", () => {
+    const file = writePmFile(pmBlockWith("D-007"));
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "pm", "--file", file, "--expected-decision-id", "D-007"], io);
+    expect(code).toBe(0);
+    expect(JSON.parse(out.join("\n")).ok).toBe(true);
+  });
+
+  test("mismatch exits 1 with DECISION_ID_MISMATCH after the strict schema validates", () => {
+    const file = writePmFile(pmBlockWith("D-001"));
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "pm", "--file", file, "--expected-decision-id", "D-002"], io);
+    expect(code).toBe(1);
+    const parsed = JSON.parse(out.join("\n")) as { code: string; expected: string; actual: string };
+    expect(parsed.code).toBe("DECISION_ID_MISMATCH");
+    expect(parsed.expected).toBe("D-002");
+    expect(parsed.actual).toBe("D-001");
+  });
+
+  test("absent --expected-decision-id keeps the previous behavior (schema-only)", () => {
+    const file = writePmFile(pmBlockWith("D-999"));
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "pm", "--file", file], io);
+    expect(code).toBe(0);
+    expect(JSON.parse(out.join("\n")).ok).toBe(true);
+  });
+
+  test("schema-invalid PM output still fails first (no cross-check applied)", () => {
+    const file = writePmFile("decision: MAYBE\nrationale: x\ndecision_id: D-001\njournal_entry: y\nhuman_gate_required: false\n");
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "pm", "--file", file, "--expected-decision-id", "D-001"], io);
+    expect(code).toBe(1);
+    const parsed = JSON.parse(out.join("\n")) as { ok: boolean; code: string };
+    expect(parsed.ok).toBe(false);
+    // schema rejection — never reaches the cross-check
+    expect(parsed.code).not.toBe("DECISION_ID_MISMATCH");
+  });
+
+  test("--expected-decision-id on a non-pm role is rejected with usage (exit 2)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-parse-pm-"));
+    cliTempDirs.push(dir);
+    const file = path.join(dir, "x.yaml");
+    fs.writeFileSync(file, "ticket: T01\nsummary: x\nfiles_changed: []\ntests: { added: 0, changed: 0 }\ncommands_run: []\nwithin_allowed_paths: true\n");
+    const { io } = fakeIo();
+    const code = runCli(["parse-agent", "engineer", "--file", file, "--expected-decision-id", "D-001"], io);
+    expect(code).toBe(2);
+  });
+});
+
 describe("runCli dispatch pm — deterministic input assembly", () => {
   function pmInputDir(): { dir: string; engineer: string; semantic: string; scope: string; facts: string } {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-pm-"));
@@ -353,12 +414,17 @@ describe("runCli dispatch pm — deterministic input assembly", () => {
     return { dir, engineer, semantic, scope, facts };
   }
 
-  const pmArgs = (epic: string, f: { engineer: string; semantic: string; scope: string; facts: string }): string[] => [
+  const pmArgs = (
+    epic: string,
+    f: { engineer: string; semantic: string; scope: string; facts: string },
+    assignedDecisionId = "D-001",
+  ): string[] => [
     "dispatch", "pm", epic,
     "--engineer-output", f.engineer,
     "--semantic-output", f.semantic,
     "--scope-output", f.scope,
     "--facts", f.facts,
+    "--assigned-decision-id", assignedDecisionId,
   ];
 
   test("assembles the validated inputs into the PM prompt and writes nothing (exit 0)", () => {
@@ -394,7 +460,10 @@ describe("runCli dispatch pm — deterministic input assembly", () => {
   test("partial pm input flags are rejected with usage (exit 2)", () => {
     const f = pmInputDir();
     const { io } = fakeIo();
-    const code = runCli(["dispatch", "pm", sandboxEpicPath, "--engineer-output", f.engineer], io);
+    const code = runCli(
+      ["dispatch", "pm", sandboxEpicPath, "--engineer-output", f.engineer, "--assigned-decision-id", "D-001"],
+      io,
+    );
     expect(code).toBe(2);
   });
 
@@ -405,11 +474,48 @@ describe("runCli dispatch pm — deterministic input assembly", () => {
     expect(code).toBe(2);
   });
 
-  test("dispatch pm with no input flags still emits the skeleton (exit 0, no assembled inputs)", () => {
+  test("dispatch pm with only --assigned-decision-id emits the skeleton + authoritative section (exit 0, no assembled inputs)", () => {
+    const { io, out } = fakeIo();
+    const code = runCli(["dispatch", "pm", sandboxEpicPath, "--assigned-decision-id", "D-001"], io);
+    expect(code).toBe(0);
+    const spec = JSON.parse(out.join("\n")) as { prompt: string };
+    expect(spec.prompt).not.toContain("## Inputs (each validated");
+    expect(spec.prompt).toContain("## Assigned decision_id (authoritative");
+    expect(spec.prompt).toContain("decision_id: D-001");
+  });
+
+  test("dispatch pm without --assigned-decision-id fails with ASSIGNED_DECISION_ID_REQUIRED (exit 1)", () => {
     const { io, out } = fakeIo();
     const code = runCli(["dispatch", "pm", sandboxEpicPath], io);
+    expect(code).toBe(1);
+    expect(JSON.parse(out.join("\n")).code).toBe("ASSIGNED_DECISION_ID_REQUIRED");
+  });
+
+  test("dispatch pm with assembled inputs renders the assigned decision_id in the prompt", () => {
+    const f = pmInputDir();
+    const { io, out } = fakeIo();
+    const code = runCli(pmArgs(sandboxEpicPath, f, "D-007"), io);
     expect(code).toBe(0);
-    expect(out.join("\n")).not.toContain("## Inputs (each validated");
+    const spec = JSON.parse(out.join("\n")) as { prompt: string };
+    expect(spec.prompt).toContain("## Assigned decision_id (authoritative");
+    expect(spec.prompt).toContain("decision_id: D-007");
+  });
+
+  test("dispatch pm with a malformed --assigned-decision-id is rejected (ASSIGNED_DECISION_ID_REQUIRED)", () => {
+    const f = pmInputDir();
+    const { io, out } = fakeIo();
+    const code = runCli(pmArgs(sandboxEpicPath, f, "X-1"), io);
+    expect(code).toBe(1);
+    expect(JSON.parse(out.join("\n")).code).toBe("ASSIGNED_DECISION_ID_REQUIRED");
+  });
+
+  test("--assigned-decision-id on a non-pm role is rejected with usage (exit 2)", () => {
+    const { io } = fakeIo();
+    const code = runCli(
+      ["dispatch", "engineer", sandboxEpicPath, "--assigned-decision-id", "D-001"],
+      io,
+    );
+    expect(code).toBe(2);
   });
 });
 

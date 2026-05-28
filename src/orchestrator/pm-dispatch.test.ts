@@ -52,10 +52,19 @@ const FACTS = JSON.stringify({
   final_branch_status: { branch: "forge/sandbox-epic/T01-add", ahead_of_base: 0, committed: false },
 });
 
-function build(overrides: Partial<{ engineer: string; semantic: string; scope: string; facts: string }> = {}) {
+function build(
+  overrides: Partial<{ engineer: string; semantic: string; scope: string; facts: string; assignedDecisionId: string }> = {},
+) {
   return buildPmDispatch(
     packets(),
-    { engineer: ENGINEER, semantic: SEMANTIC, scope: SCOPE, facts: FACTS, ...overrides },
+    {
+      engineer: ENGINEER,
+      semantic: SEMANTIC,
+      scope: SCOPE,
+      facts: FACTS,
+      assignedDecisionId: "D-001",
+      ...overrides,
+    },
     options,
   );
 }
@@ -169,7 +178,53 @@ describe("buildPmDispatch — deterministic PM input assembly", () => {
 
   test("a filled PM dispatch does not mutate the source packet skeleton", () => {
     const p = packets();
-    buildPmDispatch(p, { engineer: ENGINEER, semantic: SEMANTIC, scope: SCOPE, facts: FACTS }, options);
+    buildPmDispatch(
+      p,
+      { engineer: ENGINEER, semantic: SEMANTIC, scope: SCOPE, facts: FACTS, assignedDecisionId: "D-001" },
+      options,
+    );
     expect(p.pm.inputs.engineer_output).toBeNull(); // pure: the input packet stays a skeleton
+    expect(p.pm.inputs.assigned_decision_id).toBeNull();
+  });
+
+  test("happy-path: a pinned assigned_decision_id is rendered verbatim under the authoritative section", () => {
+    const result = build({ assignedDecisionId: "D-042" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.dispatch.prompt).toContain("## Assigned decision_id (authoritative — use verbatim, never invent)");
+    expect(result.dispatch.prompt).toContain("decision_id: D-042");
+  });
+
+  test("absent assigned_decision_id fails closed with ASSIGNED_DECISION_ID_REQUIRED", () => {
+    const result = build({ assignedDecisionId: "" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("ASSIGNED_DECISION_ID_REQUIRED");
+    expect(result.source).toBe("assigned_decision_id");
+  });
+
+  test("malformed assigned_decision_id (wrong shape) fails closed with ASSIGNED_DECISION_ID_REQUIRED", () => {
+    const result = build({ assignedDecisionId: "D-abc" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("ASSIGNED_DECISION_ID_REQUIRED");
+  });
+
+  test("integration replay: ledger with one entry yields D-002 on the next dispatch", async () => {
+    const { nextDecisionId } = await import("./decision-id.js");
+    const id1 = nextDecisionId([]);
+    expect(id1).toBe("D-001");
+    const id2 = nextDecisionId([id1]);
+    expect(id2).toBe("D-002");
+
+    const first = build({ assignedDecisionId: id1 });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.dispatch.prompt).toContain("decision_id: D-001");
+
+    const second = build({ assignedDecisionId: id2 });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.dispatch.prompt).toContain("decision_id: D-002");
   });
 });

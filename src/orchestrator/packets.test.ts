@@ -55,6 +55,11 @@ describe("generateRunPackets", () => {
     expect(packets.pm.known_harness_limitations.length).toBeGreaterThan(0);
   });
 
+  test("the PM packet has an assigned_decision_id slot defaulted to null in the skeleton", () => {
+    const packets = packetsFor(validEpic);
+    expect(packets.pm.inputs.assigned_decision_id).toBeNull();
+  });
+
   test("the engineer packet carries the full ticket body, acceptance, AI instructions, verify commands, and file path", () => {
     const p = packetsFor(sandboxEpic).engineer;
     expect(p.ticket_body).toContain("## Scope");

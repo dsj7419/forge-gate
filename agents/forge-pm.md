@@ -38,11 +38,24 @@ Your final response must be **exactly one YAML object** — either as plain YAML
 - Emit exactly one YAML object — plain YAML or a single ```yaml fenced block — with no prose before or after it.
 - Keep the field names, enums, and required fields exactly as shown.
 
+### Core-pinned fields (read from the dispatch packet — never invent)
+Two of the fields below are **Core-pinned authoritative values** the PM agent
+echoes verbatim from the dispatch packet — Core, not the agent, decides them:
+
+- `decision_id`: read the value from the dispatch packet's
+  "## Assigned decision_id (authoritative — use verbatim, never invent)"
+  section and emit it **verbatim**. **Never invent or renumber** the
+  decision_id; Core assigns it monotonically from the per-epic decisions
+  ledger before this dispatch.
+- `human_gate_required`: read the value from the "## Effective gate
+  (authoritative)" section and emit it verbatim (gate: none → false;
+  pr/merge/phase/manual → true). Never infer it.
+
 ```yaml
 decision: PASS          # PASS | CORRECT | ESCALATE
 rationale: "<why, referencing the verifier findings and evidence>"
 instructions: []        # present (non-empty) iff CORRECT; list of precise, bounded fixes
-decision_id: D-001      # D-<nnn>
+decision_id: <pinned>  # use the value pinned in the dispatch packet, never invent
 journal_entry: "<one-line append for JOURNAL.md>"
 human_gate_required: true   # true | false — MUST equal the dispatch's "Effective gate (authoritative)" value, derived from the ticket gate, never inferred (gate: none → false; pr/merge/phase/manual → true)
 ```

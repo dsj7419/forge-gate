@@ -67,15 +67,39 @@ Only writes allowed: a branch ref, the engineer's `allowed_paths` edits, and git
    Capture each raw output to `$EPIC/.forge/<role>-output.yaml` (`semantic-verifier-output.yaml`,
    `scope-verifier-output.yaml`), then `$FORGE parse-agent <role> --file "$EPIC/.forge/<role>-output.yaml"` (invalid →
    ESCALATE).
-9. **PM:** write the orchestrator-confirmed facts to `$EPIC/.forge/orchestrator-facts.json` — `{parse_validation:
-   {engineer,semantic_verifier,scope_verifier}, verify_command_results:[{cmd,result}], final_changed_files:[…],
-   final_branch_status:{branch, ahead_of_base:<git -C "$TARGET_REPO" rev-list --count base..HEAD>, committed}}`. Then let Core
-   assemble + re-validate the PM input deterministically:
-   `$FORGE dispatch pm "$EPIC" --repo-root "$TARGET_REPO" --engineer-output "$EPIC/.forge/engineer-output.yaml"
-   --semantic-output "$EPIC/.forge/semantic-verifier-output.yaml" --scope-output "$EPIC/.forge/scope-verifier-output.yaml"
-   --facts "$EPIC/.forge/orchestrator-facts.json"`. If that returns `ok:false` (any input invalid) → ESCALATE; do **not**
-   hand-assemble the prompt. Dispatch the returned spec with **Task**, then capture + `parse-agent pm --file
-   "$EPIC/.forge/pm-output.yaml"`. Decision:
+9. **PM:** Core owns the `decision_id` for this dispatch — the PM agent never invents it.
+   - (a) **Read the ledger via Core.** Read `$EPIC/.forge/decisions-ledger.json` (gitignored, runtime-only,
+     alongside `lock.json` and `active-ticket.json`). Missing file = empty ledger; malformed file → STOP
+     (`LEDGER_INVALID`) and surface to the human — do not silently recycle ids.
+   - (b) **Compute the next id via Core.** From the ledger's existing `decisions[].decision_id` values,
+     compute the next monotonic id (`D-NNN`, zero-padded width 3 until exceeded). Hold this as
+     `ASSIGNED_DECISION_ID` — Core's pinned value for this dispatch.
+   - (c) Write the orchestrator-confirmed facts to `$EPIC/.forge/orchestrator-facts.json` —
+     `{parse_validation: {engineer,semantic_verifier,scope_verifier},
+     verify_command_results:[{cmd,result}], final_changed_files:[…],
+     final_branch_status:{branch, ahead_of_base:<git -C "$TARGET_REPO" rev-list --count base..HEAD>,
+     committed}}`.
+   - (d) **Dispatch with the pinned id.** Let Core assemble + re-validate the PM input deterministically
+     and render the pinned `decision_id` into the prompt's authoritative section:
+     `$FORGE dispatch pm "$EPIC" --repo-root "$TARGET_REPO"
+     --engineer-output "$EPIC/.forge/engineer-output.yaml"
+     --semantic-output "$EPIC/.forge/semantic-verifier-output.yaml"
+     --scope-output "$EPIC/.forge/scope-verifier-output.yaml"
+     --facts "$EPIC/.forge/orchestrator-facts.json"
+     --assigned-decision-id "$ASSIGNED_DECISION_ID"`. If that returns `ok:false` (any input invalid,
+     or `ASSIGNED_DECISION_ID_REQUIRED`) → ESCALATE; do **not** hand-assemble the prompt. Dispatch the
+     returned spec with **Task**.
+   - (e) **Capture + validate + cross-check.** Capture the raw PM output to
+     `$EPIC/.forge/pm-output.yaml`, then run
+     `$FORGE parse-agent pm --file "$EPIC/.forge/pm-output.yaml" --expected-decision-id "$ASSIGNED_DECISION_ID"`.
+     If `ok:false` → ESCALATE (schema invalid → `AGENT_OUTPUT_INVALID`; the agent invented or renumbered
+     the id → `DECISION_ID_MISMATCH`).
+   - (f) **Ledger append (only on both validations passing).** Only if both the schema validation and the
+     cross-check pass, append `{decision_id: $ASSIGNED_DECISION_ID, ticket, branch, ts}` to
+     `$EPIC/.forge/decisions-ledger.json`. This append happens **before** `run-report.json` is written.
+     **No write to `JOURNAL.md` or `DECISIONS.md` is added** by this step.
+
+   Decision:
    - **CORRECT** → re-dispatch the engineer with the PM's bounded instructions (cycle ≤ 3; the 4th →
      `CORRECTION_CAP_REACHED` → ESCALATE), then re-run 6–9.
    - **ESCALATE** → step 11.
