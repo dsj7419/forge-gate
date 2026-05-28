@@ -1,0 +1,8 @@
+schema_version: 1
+id: forge-follow-up-consolidation
+title: ForgeGate — post-PR follow-up consolidation and precision hardening
+sprints:
+  - sprint-01-consolidate-and-harden
+gate_policy:
+  default_push: human
+  default_merge: human
