@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { nextDecisionId } from "./decision-id.js";
 import { NonEmptyStringSchema, TicketIdSchema } from "../schema/enums.js";
 
 /**
@@ -26,9 +27,43 @@ export const LedgerEntrySchema = z
   })
   .strict();
 
+function decisionIdValue(id: string): number {
+  // Entries already match `D-<digits>` via LedgerEntrySchema, so the prefix
+  // strip and parse are safe here.
+  return Number.parseInt(id.slice(2), 10);
+}
+
 export const DecisionsLedgerSchema = z
   .object({ decisions: z.array(LedgerEntrySchema) })
-  .strict();
+  .strict()
+  // Sequence-integrity read layer: decision ids within one active ledger must
+  // be unique and strictly increasing by numeric value in ledger order. A gap
+  // (e.g. D-001, D-003) is tolerated on read — this is a structural sanity
+  // check only, so an already-on-disk ledger stays readable.
+  .superRefine((value, ctx) => {
+    const seen = new Set<string>();
+    let previous: number | null = null;
+    value.decisions.forEach((entry, index) => {
+      if (seen.has(entry.decision_id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["decisions", index, "decision_id"],
+          message: `duplicate decision id ${entry.decision_id} — decision ids must be unique`,
+        });
+      }
+      seen.add(entry.decision_id);
+
+      const current = decisionIdValue(entry.decision_id);
+      if (previous !== null && current <= previous) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["decisions", index, "decision_id"],
+          message: `out-of-order decision id ${entry.decision_id} — decision ids must strictly increase in ledger order`,
+        });
+      }
+      previous = current;
+    });
+  });
 
 export type LedgerEntry = z.infer<typeof LedgerEntrySchema>;
 export type DecisionsLedger = z.infer<typeof DecisionsLedgerSchema>;
@@ -51,7 +86,14 @@ export type ReadLedgerResult =
 
 export type AppendLedgerResult =
   | { ok: true; ledger: DecisionsLedger }
-  | { ok: false; code: "LEDGER_INVALID" | "LEDGER_ENTRY_INVALID"; errors: string[] };
+  | {
+      ok: false;
+      // LEDGER_SEQUENCE_INVALID covers the full append sequence-integrity rule:
+      // a repeated id, a lower-than-next id, and a higher-than-next (gap) id are
+      // all rejected, because the appended id must equal nextDecisionId(existing).
+      code: "LEDGER_INVALID" | "LEDGER_ENTRY_INVALID" | "LEDGER_SEQUENCE_INVALID";
+      errors: string[];
+    };
 
 function describeIssues(error: z.ZodError): string[] {
   return error.issues.map((issue) => {
@@ -100,6 +142,21 @@ export function appendDecision(
 
   const current = readDecisionsLedger(file, io);
   if (!current.ok) return current;
+
+  // Verify the proposed id against Core's own deterministic allocator at the
+  // write boundary: it must equal the next id computed from the current
+  // ledger's ids. This rejects repeated, lower-than-next, and higher-than-next
+  // (gap) ids with no write.
+  const expected = nextDecisionId(current.ledger.decisions.map((d) => d.decision_id));
+  if (entryParsed.data.decision_id !== expected) {
+    return {
+      ok: false,
+      code: "LEDGER_SEQUENCE_INVALID",
+      errors: [
+        `decision_id ${entryParsed.data.decision_id} is not the next sequence id (expected ${expected}) — reject duplicate or out-of-order ids`,
+      ],
+    };
+  }
 
   const next: DecisionsLedger = { decisions: [...current.ledger.decisions, entryParsed.data] };
   io.writeFile(file, `${JSON.stringify(next, null, 2)}\n`);
