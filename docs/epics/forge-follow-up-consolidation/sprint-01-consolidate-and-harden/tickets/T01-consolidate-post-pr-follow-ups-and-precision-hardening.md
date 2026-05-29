@@ -11,6 +11,7 @@ gate: pr
 gate_override: false
 allowed_paths:
   - "src/run-report/cli.ts"
+  - "src/run-report/cli.test.ts"
   - "src/run-report/assemble.ts"
   - "src/run-report/assemble.test.ts"
   - "src/orchestrator/packets.ts"
@@ -18,6 +19,7 @@ allowed_paths:
   - "src/orchestrator/pm-dispatch.test.ts"
   - "src/orchestrator/dispatch.ts"
   - "src/orchestrator/dispatch.test.ts"
+  - "src/cli/run.test.ts"
   - "commands/forge-run-ticket.md"
   - "README.md"
 forbidden_paths:
@@ -34,7 +36,6 @@ forbidden_paths:
   - "src/run-report/schema.ts"
   - "src/run-report/schema.test.ts"
   - "src/cli/run.ts"
-  - "src/cli/run.test.ts"
   - "agents/**"
   - "package.json"
   - "pnpm-lock.yaml"
@@ -95,8 +96,11 @@ Four scoped sub-fixes, all small:
   `forge-run-report/v1` artifact stays stable.
 - Any change to the T01 decision-id modules: `src/orchestrator/decision-id.ts`,
   `decisions-ledger.ts`, or their tests.
-- Any change to `src/cli/run.ts` or `src/cli/run.test.ts` — the CLI router wiring for
-  `forge dispatch pm` / `forge parse-agent pm` / `forge run-report write` stays as it is.
+- Any change to `src/cli/run.ts` — the CLI router wiring for `forge dispatch pm` /
+  `forge parse-agent pm` / `forge run-report write` stays as it is. `src/cli/run.test.ts` and
+  `src/run-report/cli.test.ts` may be touched **only** to add `pm: true` to existing FACTS /
+  `OrchestratorConfirmedFacts` test fixtures — the necessary blast radius of sub-fix #2's schema
+  extension. No new tests in those files; no router-wiring or USAGE assertion changes.
 - `run_id` or `attempt_id` — separate concern; not in this ticket.
 - Status write-back, ticket file edits, manifest edits, governance edits.
 - Any code path that writes `JOURNAL.md` or `DECISIONS.md`.
@@ -184,6 +188,8 @@ Four scoped sub-fixes, all small:
 - [ ] `src/agents/parse-output.ts`, `src/agents/schemas.ts`, `src/agents/index.ts`,
       `src/run-report/schema.ts`, `src/run-report/schema.test.ts`, `src/orchestrator/decision-id.ts`,
       `decision-id.test.ts`, `decisions-ledger.ts`, `decisions-ledger.test.ts`, `src/cli/run.ts`,
-      `src/cli/run.test.ts`, and all files under `agents/` are unchanged (git diff empty for
-      each).
+      and all files under `agents/` are unchanged (git diff empty for each).
+- [ ] `src/cli/run.test.ts` and `src/run-report/cli.test.ts` changes are limited to adding
+      `pm: true` to existing FACTS / `OrchestratorConfirmedFacts` fixtures — no new tests, no
+      router-wiring or USAGE assertion changes.
 - [ ] `pnpm test` and `pnpm typecheck` pass.
