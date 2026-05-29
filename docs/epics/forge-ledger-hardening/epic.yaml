@@ -1,0 +1,8 @@
+schema_version: 1
+id: forge-ledger-hardening
+title: ForgeGate — decisions-ledger sequence-integrity hardening
+sprints:
+  - sprint-01-ledger-integrity
+gate_policy:
+  default_push: human
+  default_merge: human
