@@ -98,6 +98,51 @@ describe("readDecisionsLedger — Zod-validated reader", () => {
     readDecisionsLedger(LEDGER, io);
     expect(writes).toEqual([]);
   });
+
+  test("rejects a ledger with duplicate decision ids (LEDGER_INVALID)", () => {
+    const { io } = makeIo({
+      [LEDGER]: JSON.stringify({
+        decisions: [
+          { decision_id: "D-001", ticket: "T01", branch: "forge/x/T01", ts: "2026-05-27T00:00:00Z" },
+          { decision_id: "D-001", ticket: "T02", branch: "forge/x/T02", ts: "2026-05-27T00:01:00Z" },
+        ],
+      }),
+    });
+    const result = readDecisionsLedger(LEDGER, io);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("LEDGER_INVALID");
+  });
+
+  test("rejects a ledger whose decision ids decrease in order (LEDGER_INVALID)", () => {
+    const { io } = makeIo({
+      [LEDGER]: JSON.stringify({
+        decisions: [
+          { decision_id: "D-002", ticket: "T02", branch: "forge/x/T02", ts: "2026-05-27T00:01:00Z" },
+          { decision_id: "D-001", ticket: "T01", branch: "forge/x/T01", ts: "2026-05-27T00:00:00Z" },
+        ],
+      }),
+    });
+    const result = readDecisionsLedger(LEDGER, io);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("LEDGER_INVALID");
+  });
+
+  test("tolerates a gap in decision ids on read (D-001 then D-003 is ok)", () => {
+    const { io } = makeIo({
+      [LEDGER]: JSON.stringify({
+        decisions: [
+          { decision_id: "D-001", ticket: "T01", branch: "forge/x/T01", ts: "2026-05-27T00:00:00Z" },
+          { decision_id: "D-003", ticket: "T03", branch: "forge/x/T03", ts: "2026-05-27T00:02:00Z" },
+        ],
+      }),
+    });
+    const result = readDecisionsLedger(LEDGER, io);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.ledger.decisions.map((d) => d.decision_id)).toEqual(["D-001", "D-003"]);
+  });
 });
 
 describe("appendDecision — single appender behind the IO seam", () => {
@@ -152,6 +197,98 @@ describe("appendDecision — single appender behind the IO seam", () => {
     if (result.ok) return;
     expect(result.code).toBe("LEDGER_INVALID");
     expect(writes).toEqual([]);
+  });
+
+  test("rejects a duplicate decision_id with a typed failure and no write", () => {
+    const { io, writes } = makeIo({
+      [LEDGER]: JSON.stringify({
+        decisions: [{ decision_id: "D-001", ticket: "T01", branch: "forge/x/T01", ts: "2026-05-27T00:00:00Z" }],
+      }),
+    });
+    const result = appendDecision(
+      LEDGER,
+      { decision_id: "D-001", ticket: "T02", branch: "forge/x/T02", ts: "2026-05-27T00:01:00Z" },
+      io,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("LEDGER_SEQUENCE_INVALID");
+    expect(writes).toEqual([]);
+  });
+
+  test("rejects a lower-than-next decision_id with a typed failure and no write", () => {
+    const { io, writes } = makeIo({
+      [LEDGER]: JSON.stringify({
+        decisions: [
+          { decision_id: "D-001", ticket: "T01", branch: "forge/x/T01", ts: "2026-05-27T00:00:00Z" },
+          { decision_id: "D-002", ticket: "T02", branch: "forge/x/T02", ts: "2026-05-27T00:01:00Z" },
+        ],
+      }),
+    });
+    // expected next is D-003; D-002 is lower-than-next.
+    const result = appendDecision(
+      LEDGER,
+      { decision_id: "D-002", ticket: "T03", branch: "forge/x/T03", ts: "2026-05-27T00:02:00Z" },
+      io,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("LEDGER_SEQUENCE_INVALID");
+    expect(writes).toEqual([]);
+  });
+
+  test("rejects a higher-than-next (gap) decision_id with a typed failure and no write", () => {
+    const { io, writes } = makeIo({
+      [LEDGER]: JSON.stringify({
+        decisions: [{ decision_id: "D-001", ticket: "T01", branch: "forge/x/T01", ts: "2026-05-27T00:00:00Z" }],
+      }),
+    });
+    // expected next is D-002; D-003 skips a value.
+    const result = appendDecision(
+      LEDGER,
+      { decision_id: "D-003", ticket: "T03", branch: "forge/x/T03", ts: "2026-05-27T00:02:00Z" },
+      io,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("LEDGER_SEQUENCE_INVALID");
+    expect(writes).toEqual([]);
+  });
+
+  test("accepts an entry equal to nextDecisionId(existing), writes once, preserving order", () => {
+    const { io, state, writes } = makeIo({
+      [LEDGER]: JSON.stringify({
+        decisions: [{ decision_id: "D-001", ticket: "T01", branch: "forge/x/T01", ts: "2026-05-27T00:00:00Z" }],
+      }),
+    });
+    const result = appendDecision(
+      LEDGER,
+      { decision_id: "D-002", ticket: "T02", branch: "forge/x/T02", ts: "2026-05-27T00:01:00Z" },
+      io,
+    );
+    expect(result.ok).toBe(true);
+    expect(writes).toEqual([LEDGER]);
+    const parsed = JSON.parse(state[LEDGER] ?? "") as { decisions: { decision_id: string }[] };
+    expect(parsed.decisions.map((d) => d.decision_id)).toEqual(["D-001", "D-002"]);
+  });
+
+  test("a fresh active ledger accepts D-001 even when an archived sibling also holds D-001 (no cross-file constraint)", () => {
+    const ARCHIVED = "/epic/.forge/escalate-attempt1/decisions-ledger.json";
+    const { io, state, writes } = makeIo({
+      [ARCHIVED]: JSON.stringify({
+        decisions: [{ decision_id: "D-001", ticket: "T01", branch: "forge/x/T01", ts: "2026-05-27T00:00:00Z" }],
+      }),
+    });
+    // The active ledger is a distinct (absent) path through the IO seam.
+    const result = appendDecision(
+      LEDGER,
+      { decision_id: "D-001", ticket: "T01", branch: "forge/x/T01", ts: "2026-05-28T00:00:00Z" },
+      io,
+    );
+    expect(result.ok).toBe(true);
+    expect(writes).toEqual([LEDGER]);
+    const parsed = JSON.parse(state[LEDGER] ?? "") as { decisions: { decision_id: string }[] };
+    expect(parsed.decisions.map((d) => d.decision_id)).toEqual(["D-001"]);
   });
 
   test("nextDecisionId fed by readDecisionsLedger produces D-001 then D-002 across two appends (integration replay)", async () => {
