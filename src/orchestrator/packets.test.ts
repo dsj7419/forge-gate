@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, test } from "vitest";
 
-import { generateRunPackets } from "./packets.js";
+import { generateRunPackets, OrchestratorConfirmedFactsSchema } from "./packets.js";
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const validEpic = path.join(repoRoot, "src", "validate", "__fixtures__", "valid-epic");
@@ -89,5 +89,33 @@ describe("generateRunPackets", () => {
     generateRunPackets(validEpic, repoRoot);
     const after = fs.readdirSync(validEpic, { recursive: true }).map(String).sort();
     expect(after).toEqual(before);
+  });
+});
+
+describe("OrchestratorConfirmedFactsSchema", () => {
+  test("rejects facts whose parse_validation is missing the pm flag", () => {
+    // Facts that pre-date the pm flag — every other required field is present
+    // and well-typed, so the only reason to reject is the missing `pm`.
+    const factsMissingPm = {
+      parse_validation: { engineer: true, semantic_verifier: true, scope_verifier: true },
+      verify_command_results: [{ cmd: "pnpm test", result: "pass" }],
+      final_changed_files: ["src/sandbox/add.ts"],
+      final_branch_status: { branch: "forge/sandbox/T01", ahead_of_base: 0, committed: false },
+    };
+    const result = OrchestratorConfirmedFactsSchema.safeParse(factsMissingPm);
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error.issues.some((issue) => issue.path.join(".") === "parse_validation.pm")).toBe(true);
+  });
+
+  test("accepts facts that include parse_validation.pm: true", () => {
+    const facts = {
+      parse_validation: { engineer: true, semantic_verifier: true, scope_verifier: true, pm: true },
+      verify_command_results: [{ cmd: "pnpm test", result: "pass" }],
+      final_changed_files: ["src/sandbox/add.ts"],
+      final_branch_status: { branch: "forge/sandbox/T01", ahead_of_base: 0, committed: false },
+    };
+    const result = OrchestratorConfirmedFactsSchema.safeParse(facts);
+    expect(result.success).toBe(true);
   });
 });

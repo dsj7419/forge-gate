@@ -287,8 +287,8 @@ Forge v1 is intentionally conservative and human-gated:
   not written by a run.
 - **The engineer edits only `allowed_paths`.** The diff is independently scope-checked against the packet's
   allowed/forbidden/protected paths.
-- **`.forge/` runtime artifacts are gitignored** (`active-ticket.json`, `lock.json`, `run-report.json`, the
-  captured agent outputs, the validation/import reports).
+- **`.forge/` runtime artifacts are gitignored** (`active-ticket.json`, `lock.json`, `run-report.json`,
+  `decisions-ledger.json`, the captured agent outputs, the validation/import reports).
 - **`lock.json` guards concurrency.** A run refuses to start if a lock is present; the human is shown the
   recovery path rather than having it silently overwritten.
 - **Failed runs preserve evidence.** A failure writes `.forge/run-report.json`, leaves the branch and working

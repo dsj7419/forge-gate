@@ -30,7 +30,7 @@ contract files. The engineer may edit only the ticket's `allowed_paths`. Every a
 evidence gathered outside `repo_root` is invalid. Every agent output MUST pass `forge parse-agent`. Malformed
 output → ESCALATE. Failed verify → correct/escalate. Scope violation → correct/escalate. Correction cap = 3.
 Only writes allowed: a branch ref, the engineer's `allowed_paths` edits, and gitignored `.forge/` runtime
-(`active-ticket.json`, `lock.json`, `run-report.json`). If `.forge/` is not gitignored, STOP and escalate.
+(`active-ticket.json`, `lock.json`, `run-report.json`, `decisions-ledger.json`). If `.forge/` is not gitignored, STOP and escalate.
 
 ## Procedure
 
@@ -78,10 +78,12 @@ Only writes allowed: a branch ref, the engineer's `allowed_paths` edits, and git
      compute the next monotonic id (`D-NNN`, zero-padded width 3 until exceeded). Hold this as
      `ASSIGNED_DECISION_ID` — Core's pinned value for this dispatch.
    - (c) Write the orchestrator-confirmed facts to `$EPIC/.forge/orchestrator-facts.json` —
-     `{parse_validation: {engineer,semantic_verifier,scope_verifier},
+     `{parse_validation: {engineer,semantic_verifier,scope_verifier,pm},
      verify_command_results:[{cmd,result}], final_changed_files:[…],
      final_branch_status:{branch, ahead_of_base:<git -C "$TARGET_REPO" rev-list --count base..HEAD>,
-     committed}}`.
+     committed}}`. At this step `parse_validation.pm` is `false` — it is recorded `true` only after
+     `parse-agent pm` returns `ok:true` AND the `--expected-decision-id` cross-check succeeds (i.e. step
+     9(e) exits 0); rewrite the facts file with `pm: true` before step 10 invokes `run-report write`.
    - (d) **Dispatch with the pinned id.** Let Core assemble + re-validate the PM input deterministically
      and render the pinned `decision_id` into the prompt's authoritative section:
      `$FORGE dispatch pm "$EPIC" --repo-root "$TARGET_REPO"

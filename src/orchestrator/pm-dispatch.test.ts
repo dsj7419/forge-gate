@@ -46,7 +46,7 @@ const SCOPE = [
 ].join("\n");
 
 const FACTS = JSON.stringify({
-  parse_validation: { engineer: true, semantic_verifier: true, scope_verifier: true },
+  parse_validation: { engineer: true, semantic_verifier: true, scope_verifier: true, pm: true },
   verify_command_results: [{ cmd: "pnpm test", result: "pass" }],
   final_changed_files: ["src/sandbox/add.ts", "src/sandbox/add.test.ts"],
   final_branch_status: { branch: "forge/sandbox-epic/T01-add", ahead_of_base: 0, committed: false },

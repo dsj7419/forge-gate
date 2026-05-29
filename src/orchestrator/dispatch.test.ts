@@ -16,6 +16,20 @@ function packets() {
   return result.packets;
 }
 
+/**
+ * Packets with the PM `assigned_decision_id` slot filled — mirrors what
+ * `buildPmDispatch` / the CLI skeleton path do before rendering the PM packet.
+ * Lets non-PM-focused tests exercise the pm role without tripping the
+ * defense-in-depth throw for a null slot.
+ */
+function packetsWithPmPinned(assignedDecisionId: string = "D-001") {
+  const p = packets();
+  return {
+    ...p,
+    pm: { ...p.pm, inputs: { ...p.pm.inputs, assigned_decision_id: assignedDecisionId } },
+  };
+}
+
 describe("loadCharterBody", () => {
   test("loads the tracked charter body verbatim (frontmatter stripped)", () => {
     const body = loadCharterBody(agentsDir, "engineer");
@@ -69,7 +83,7 @@ describe("buildAgentDispatch — registered mode", () => {
   });
 
   test("maps each role to its registered subagent type", () => {
-    const p = packets();
+    const p = packetsWithPmPinned();
     expect(buildAgentDispatch("semantic-verifier", p, { registeredAvailable: true, agentsDir }).subagent_type).toBe("forge-semantic-verifier");
     expect(buildAgentDispatch("scope-verifier", p, { registeredAvailable: true, agentsDir }).subagent_type).toBe("forge-scope-verifier");
     expect(buildAgentDispatch("pm", p, { registeredAvailable: true, agentsDir }).subagent_type).toBe("forge-pm");
@@ -78,11 +92,22 @@ describe("buildAgentDispatch — registered mode", () => {
 
 describe("buildAgentDispatch — cwd discipline on every role", () => {
   test("every role's dispatch pins repo_root and the cwd-discipline statement", () => {
-    const p = packets();
+    const p = packetsWithPmPinned();
     for (const role of ["engineer", "semantic-verifier", "scope-verifier", "pm"] as const) {
       const d = buildAgentDispatch(role, p, { registeredAvailable: false, agentsDir });
       expect(d.prompt).toContain(p.engineer.repo_root);
       expect(d.prompt).toContain("Evidence gathered outside repo_root is invalid evidence.");
     }
+  });
+
+  test("pm dispatch throws when assigned_decision_id is null (skeleton-from-packets path)", () => {
+    // `generateRunPackets` leaves `pm.inputs.assigned_decision_id` null in the
+    // skeleton — the orchestrator must pin it (via `buildPmDispatch` or the CLI
+    // skeleton path) before rendering. Calling `buildAgentDispatch('pm', ...)`
+    // directly on a skeleton must fail closed rather than silently omit the
+    // authoritative section the PM charter teaches the agent to read.
+    expect(() => buildAgentDispatch("pm", packets(), { registeredAvailable: false, agentsDir })).toThrow(
+      /pm.*assigned_decision_id must be pinned before the pm packet renders/i,
+    );
   });
 });

@@ -48,7 +48,7 @@ const PM: PMOutput = {
 };
 
 const FACTS: OrchestratorConfirmedFacts = {
-  parse_validation: { engineer: true, semantic_verifier: true, scope_verifier: true },
+  parse_validation: { engineer: true, semantic_verifier: true, scope_verifier: true, pm: true },
   verify_command_results: [
     { cmd: "pnpm test", result: "pass" },
     { cmd: "pnpm typecheck", result: "pass" },
@@ -127,6 +127,22 @@ describe("assembleRunReport — happy path", () => {
       scope_verifier: ".forge/scope-verifier-output.yaml",
       pm: ".forge/pm-output.yaml",
     });
+  });
+
+  test("propagates parse_validation.pm from facts to the assembled report (not hard-coded)", () => {
+    // ESCALATE path lets us observe `pm: false` propagate end-to-end without
+    // tripping RESULT_REQUIRES_GREEN, proving the report's `parse_validation.pm`
+    // mirrors the upstream facts rather than being hard-coded `true`.
+    const facts: OrchestratorConfirmedFacts = {
+      ...FACTS,
+      parse_validation: { ...FACTS.parse_validation, pm: false },
+    };
+    const pm: PMOutput = { ...PM, decision: "ESCALATE", rationale: "pm parse failed" };
+    const runtime: RuntimeMetadata = { ...RUNTIME, result: "ESCALATE" };
+    const result = assembleRunReport(inputs({ facts, pm, runtime }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.report.parse_validation.pm).toBe(false);
   });
 });
 
@@ -207,6 +223,18 @@ describe("assembleRunReport — RESULT_REQUIRES_GREEN when PASS is requested ove
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.code).toBe("RESULT_REQUIRES_GREEN");
+  });
+
+  test("fails when parse_validation.pm is false and result is PASS", () => {
+    const facts: OrchestratorConfirmedFacts = {
+      ...FACTS,
+      parse_validation: { ...FACTS.parse_validation, pm: false },
+    };
+    const result = assembleRunReport(inputs({ facts }));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("RESULT_REQUIRES_GREEN");
+    expect(result.errors.some((message) => message.includes("parse_validation.pm is false"))).toBe(true);
   });
 
   test("fails when PM decision is CORRECT but result is PASS", () => {

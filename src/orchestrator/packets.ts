@@ -82,7 +82,16 @@ export type ScopeVerifierPacket = PacketCommon & { role: "scope-verifier"; outpu
 export const OrchestratorConfirmedFactsSchema = z
   .object({
     parse_validation: z
-      .object({ engineer: z.boolean(), semantic_verifier: z.boolean(), scope_verifier: z.boolean() })
+      .object({
+        engineer: z.boolean(),
+        semantic_verifier: z.boolean(),
+        scope_verifier: z.boolean(),
+        // `pm: true` is recorded by the orchestrator only after `parse-agent pm`
+        // returns ok:true AND the `--expected-decision-id` cross-check succeeds
+        // (i.e. step 9(e) exits 0). The run-report assembler consumes this flag
+        // verbatim — it never assumes PM validated successfully.
+        pm: z.boolean(),
+      })
       .strict(),
     verify_command_results: z.array(
       z.object({ cmd: z.string(), result: z.enum(["pass", "fail"]) }).strict(),

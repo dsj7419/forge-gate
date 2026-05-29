@@ -101,10 +101,17 @@ function renderContext(role: AgentRole, packets: RunPacketSet): string {
     case "pm": {
       const p = packets.pm;
       const i = p.inputs;
-      const lines = [...renderCommon(p)];
-      if (i.assigned_decision_id !== null) {
-        lines.push("", ...renderAssignedDecisionId(i.assigned_decision_id));
+      // Defense in depth: the PM charter teaches the agent to read the
+      // authoritative `assigned_decision_id` section, so silently omitting it
+      // when the slot is null would teach the next caller a footgun. Every
+      // current caller (`buildPmDispatch`, the CLI skeleton path) fills the
+      // slot before rendering; fail closed if a future one forgets.
+      if (i.assigned_decision_id === null) {
+        throw new Error(
+          "pm: assigned_decision_id must be pinned before the pm packet renders (skeleton value null is not renderable)",
+        );
       }
+      const lines = [...renderCommon(p), "", ...renderAssignedDecisionId(i.assigned_decision_id)];
       if (
         i.engineer_output !== null &&
         i.semantic_verifier_output !== null &&

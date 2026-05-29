@@ -120,8 +120,7 @@ export function assembleRunReport(inputs: AssembleInputs): AssembleResult {
     if (!facts.parse_validation.engineer) greenFailures.push("parse_validation.engineer is false");
     if (!facts.parse_validation.semantic_verifier) greenFailures.push("parse_validation.semantic_verifier is false");
     if (!facts.parse_validation.scope_verifier) greenFailures.push("parse_validation.scope_verifier is false");
-    // PM's own validation is implicitly green if we have a validated PMOutput,
-    // but we still cross-check the decision and verifier verdicts:
+    if (!facts.parse_validation.pm) greenFailures.push("parse_validation.pm is false");
     if (semantic.verdict !== "APPROVE") greenFailures.push(`semantic verdict is ${semantic.verdict}, expected APPROVE`);
     if (scope.verdict !== "APPROVE") greenFailures.push(`scope verdict is ${scope.verdict}, expected APPROVE`);
     if (pm.decision !== "PASS") greenFailures.push(`PM decision is ${pm.decision}, expected PASS`);
@@ -160,10 +159,7 @@ export function assembleRunReport(inputs: AssembleInputs): AssembleResult {
       engineer: facts.parse_validation.engineer,
       semantic_verifier: facts.parse_validation.semantic_verifier,
       scope_verifier: facts.parse_validation.scope_verifier,
-      // PM is validated by `parse-agent pm --expected-decision-id` upstream of
-      // this assembler. If we are here with a typed PMOutput, that validation
-      // passed; recording `true` keeps the report honest with the dispatch.
-      pm: true,
+      pm: facts.parse_validation.pm,
     },
     verify_command_results: facts.verify_command_results.map((entry) => ({
       cmd: entry.cmd,
