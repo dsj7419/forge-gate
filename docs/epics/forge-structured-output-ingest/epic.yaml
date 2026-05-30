@@ -1,0 +1,8 @@
+schema_version: 1
+id: forge-structured-output-ingest
+title: ForgeGate — structured-output agent ingest (zod/v4 + source-agnostic adapter)
+sprints:
+  - sprint-01-structured-ingest
+gate_policy:
+  default_push: human
+  default_merge: human
