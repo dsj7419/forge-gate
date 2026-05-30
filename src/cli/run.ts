@@ -1,7 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { parseAgentOutput, type AgentRole } from "../agents/parse-output.js";
+import { ingestAgentOutput } from "../agents/ingest.js";
+import { parseAgentOutput, type ParseResult } from "../agents/parse-output.js";
+import { toRoleJsonSchema, type AgentRole } from "../agents/schemas.js";
 import { runGuardPaths } from "../guard/cli.js";
 import { runVerifyInstall } from "../install/cli.js";
 import { emitActiveTicket } from "./active-ticket.js";
@@ -48,7 +50,8 @@ const USAGE =
   "       forge packets <epic-path> [--repo-root <path>]\n" +
   "       forge dispatch <engineer|semantic-verifier|scope-verifier> <epic-path> [--repo-root <path>]\n" +
   "       forge dispatch pm <epic-path> --assigned-decision-id <D-NNN> [--engineer-output <f> --semantic-output <f> --scope-output <f> --facts <f.json>] [--repo-root <path>]\n" +
-  "       forge parse-agent <role> (--file <path> | --stdin) [--expected-decision-id <D-NNN> (pm only)]\n" +
+  "       forge parse-agent <role> (--file <path> | --stdin | --json-file <path> | --json-stdin) [--expected-decision-id <D-NNN> (pm only)]\n" +
+  "       forge agent-schema <role>\n" +
   "       forge active-ticket <epic-path> [--json] [--repo-root <path>]\n" +
   "       forge guard paths [--active <active-ticket.json>] [--json] [--repo-root <path>]\n" +
   "       forge run-report write <epic-path> --repo-root <p> --result PASS|ESCALATE --ticket-title <s> --checkpoint-base <sha> --checkpoint-head <sha> --guard-result <s> --guard-exit <n> --gate-declared <g> --gate-effective <g> --gate-human-required <true|false> [--engineer-output <p>] [--semantic-output <p>] [--scope-output <p>] [--pm-output <p>] [--facts <p>] [--active-ticket <p>] [--out <p>] [--proposed-status-transition <s>] [--suggested-commit-message <s>] [--suggested-command <s>] [--note <s>]\n" +
@@ -225,6 +228,14 @@ export function runCli(argv: string[], io: CliIo, options: RunCliOptions = {}): 
     return runVerifyInstall(argv.slice(1), io);
   }
 
+  if (command === "agent-schema") {
+    const role = epicPath; // argv[1]
+    if (!isAgentRole(role)) return usageError(io, "agent-schema requires a valid <role>");
+    if (flags.length > 0) return usageError(io, `unknown option(s): ${flags.join(", ")}`);
+    io.print(JSON.stringify(toRoleJsonSchema(role), null, 2));
+    return 0;
+  }
+
   if (command === "parse-agent") {
     const role = epicPath; // argv[1]
     if (!isAgentRole(role)) return usageError(io, "parse-agent requires a valid <role>");
@@ -236,23 +247,56 @@ export function runCli(argv: string[], io: CliIo, options: RunCliOptions = {}): 
       return usageError(io, "--expected-decision-id is only valid for `parse-agent pm`");
     }
 
-    const fileIndex = flags.indexOf("--file");
-    let raw: string;
-    if (fileIndex !== -1) {
-      const file = flags[fileIndex + 1];
-      if (file === undefined) return usageError(io, "parse-agent --file requires a path");
-      raw = fs.readFileSync(file, "utf8");
-    } else if (flags.includes("--stdin")) {
-      raw = fs.readFileSync(0, "utf8");
-    } else {
-      return usageError(io, "parse-agent requires --file <path> or --stdin");
+    // Exactly one input mode is allowed. The two YAML modes (--file/--stdin) route
+    // through parseAgentOutput; the two structured modes (--json-file/--json-stdin)
+    // JSON.parse to an object and route through ingestAgentOutput. Combining modes
+    // is a usage error (exit 2). Malformed JSON is AGENT_OUTPUT_INVALID, never repaired.
+    const modes = INPUT_MODES.filter((mode) => flags.includes(mode));
+    if (modes.length === 0) {
+      return usageError(io, "parse-agent requires --file <path>, --stdin, --json-file <path>, or --json-stdin");
     }
-    const result = parseAgentOutput(role, raw);
-    // Post-validation cross-check: after the strict schema parse, if the caller
-    // pinned an expected decision_id (Core-assigned monotonically from the
-    // ledger), the emitted value must equal it verbatim. The schema is *not*
-    // changed for this — it is a CLI-layer guard so the PM agent cannot
-    // silently invent or renumber the id.
+    if (modes.length > 1) {
+      return usageError(io, `exactly one input mode is allowed; got: ${modes.join(", ")}`);
+    }
+    const mode = modes[0];
+
+    let result: ParseResult<unknown>;
+    if (mode === "--file" || mode === "--stdin") {
+      let raw: string;
+      if (mode === "--file") {
+        const file = flagValue(flags, "--file");
+        if (file === undefined) return usageError(io, "parse-agent --file requires a path");
+        raw = fs.readFileSync(file, "utf8");
+      } else {
+        raw = fs.readFileSync(0, "utf8");
+      }
+      result = parseAgentOutput(role, raw);
+    } else {
+      let text: string;
+      if (mode === "--json-file") {
+        const file = flagValue(flags, "--json-file");
+        if (file === undefined) return usageError(io, "parse-agent --json-file requires a path");
+        text = fs.readFileSync(file, "utf8");
+      } else {
+        text = fs.readFileSync(0, "utf8");
+      }
+      let value: unknown;
+      try {
+        value = JSON.parse(text);
+      } catch (thrown) {
+        const detail = thrown instanceof Error ? thrown.message : String(thrown);
+        result = { ok: false, code: "AGENT_OUTPUT_INVALID", errors: [`malformed JSON: ${detail}`] };
+        io.print(JSON.stringify(result, null, 2));
+        return 1;
+      }
+      result = ingestAgentOutput(role, { source: "structured", value });
+    }
+
+    // Post-validation cross-check (both paths): after the strict schema parse, if the
+    // caller pinned an expected decision_id (Core-assigned monotonically from the
+    // ledger), the emitted value must equal it verbatim. The schema is *not* changed
+    // for this — it is a CLI-layer guard so the PM agent cannot silently invent or
+    // renumber the id.
     if (result.ok && role === "pm" && expectedDecisionId !== undefined) {
       const emitted = (result.data as { decision_id: string }).decision_id;
       if (emitted !== expectedDecisionId) {
@@ -303,7 +347,8 @@ const DISPATCH_FLAGS = new Set([
   "--json",
   "--repo-root",
 ]);
-const PARSE_AGENT_FLAGS = new Set(["--file", "--stdin", "--expected-decision-id"]);
+const PARSE_AGENT_FLAGS = new Set(["--file", "--stdin", "--json-file", "--json-stdin", "--expected-decision-id"]);
+const INPUT_MODES = ["--file", "--stdin", "--json-file", "--json-stdin"] as const;
 const ASSIGNED_DECISION_ID_PATTERN = /^D-\d+$/;
 
 function flagValue(args: string[], flag: string): string | undefined {

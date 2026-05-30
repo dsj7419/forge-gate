@@ -1,27 +1,18 @@
 import { parse as parseYaml } from "yaml";
-import { z } from "zod";
+import type { z } from "zod/v4";
 
 import {
-  EngineerOutputSchema,
-  PMOutputSchema,
-  ScopeVerifierOutputSchema,
-  SemanticVerifierOutputSchema,
+  ROLE_SCHEMAS,
+  type AgentRole,
   type EngineerOutput,
   type PMOutput,
   type ScopeVerifierOutput,
   type SemanticVerifierOutput,
 } from "./schemas.js";
 
-export type AgentRole = "engineer" | "semantic-verifier" | "scope-verifier" | "pm";
+export type { AgentRole } from "./schemas.js";
 
 export type ParseResult<T> = { ok: true; data: T } | { ok: false; code: "AGENT_OUTPUT_INVALID"; errors: string[] };
-
-const SCHEMAS: Record<AgentRole, z.ZodTypeAny> = {
-  engineer: EngineerOutputSchema,
-  "semantic-verifier": SemanticVerifierOutputSchema,
-  "scope-verifier": ScopeVerifierOutputSchema,
-  pm: PMOutputSchema,
-};
 
 function fail(errors: string[]): { ok: false; code: "AGENT_OUTPUT_INVALID"; errors: string[] } {
   return { ok: false, code: "AGENT_OUTPUT_INVALID", errors };
@@ -32,6 +23,22 @@ function describeIssues(error: z.ZodError): string[] {
     const at = issue.path.length > 0 ? `${issue.path.join(".")}: ` : "";
     return `${at}${issue.message}`;
   });
+}
+
+/**
+ * Validate an already-parsed object against a role schema — the single source of
+ * truth shared by both the YAML path (parseAgentOutput) and the structured path
+ * (ingestAgentOutput). Never repairs: any schema problem yields AGENT_OUTPUT_INVALID.
+ */
+export function validateRole(role: "engineer", data: unknown): ParseResult<EngineerOutput>;
+export function validateRole(role: "semantic-verifier", data: unknown): ParseResult<SemanticVerifierOutput>;
+export function validateRole(role: "scope-verifier", data: unknown): ParseResult<ScopeVerifierOutput>;
+export function validateRole(role: "pm", data: unknown): ParseResult<PMOutput>;
+export function validateRole(role: AgentRole, data: unknown): ParseResult<unknown>;
+export function validateRole(role: AgentRole, data: unknown): ParseResult<unknown> {
+  const parsed = ROLE_SCHEMAS[role].safeParse(data);
+  if (!parsed.success) return fail(describeIssues(parsed.error));
+  return { ok: true, data: parsed.data };
 }
 
 /**
@@ -67,9 +74,7 @@ export function parseAgentOutput(role: AgentRole, raw: string): ParseResult<unkn
     return fail(["agent output must be a YAML object (a scalar or prose-only response is rejected)"]);
   }
 
-  const parsed = SCHEMAS[role].safeParse(data);
-  if (!parsed.success) return fail(describeIssues(parsed.error));
-  return { ok: true, data: parsed.data };
+  return validateRole(role, data);
 }
 
 const FENCE_OPEN = /^\s*```\s*([A-Za-z0-9_-]*)\s*$/;

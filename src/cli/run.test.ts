@@ -916,3 +916,159 @@ describe("runCli run-report write routing", () => {
     expect(parsed.result).toBe("PASS");
   });
 });
+
+describe("runCli parse-agent — structured (JSON) modes", () => {
+  const engineerObj = {
+    ticket: "T01",
+    summary: "x",
+    files_changed: [{ path: "src/x.ts", adds: 1, dels: 0 }],
+    tests: { added: 1, changed: 0 },
+    commands_run: [{ cmd: "pnpm test", result: "pass" }],
+    within_allowed_paths: true,
+  };
+
+  function writeJson(value: unknown): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-pa-json-"));
+    cliTempDirs.push(dir);
+    const file = path.join(dir, "out.json");
+    fs.writeFileSync(file, typeof value === "string" ? value : JSON.stringify(value));
+    return file;
+  }
+
+  test("--json-file validates a good engineer object (exit 0, ok:true)", () => {
+    const file = writeJson(engineerObj);
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "engineer", "--json-file", file], io);
+    expect(code).toBe(0);
+    expect(JSON.parse(out.join("\n")).ok).toBe(true);
+  });
+
+  test("--json-file rejects an invalid engineer object (exit 1, ok:false)", () => {
+    const file = writeJson({ summary: "missing fields" });
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "engineer", "--json-file", file], io);
+    expect(code).toBe(1);
+    expect(JSON.parse(out.join("\n")).ok).toBe(false);
+  });
+
+  test("--json-file with malformed JSON fails with AGENT_OUTPUT_INVALID (exit 1, never repaired)", () => {
+    const file = writeJson("{ not json");
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "engineer", "--json-file", file], io);
+    expect(code).toBe(1);
+    const parsed = JSON.parse(out.join("\n")) as { ok: boolean; code: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.code).toBe("AGENT_OUTPUT_INVALID");
+  });
+
+  test("--json-file rejects a non-object JSON scalar (exit 1)", () => {
+    const file = writeJson("\"looks good\"");
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "engineer", "--json-file", file], io);
+    expect(code).toBe(1);
+    expect(JSON.parse(out.join("\n")).code).toBe("AGENT_OUTPUT_INVALID");
+  });
+
+  test("combining --json-file with --file is a usage error (exit 2)", () => {
+    const file = writeJson(engineerObj);
+    const { io } = fakeIo();
+    expect(runCli(["parse-agent", "engineer", "--json-file", file, "--file", file], io)).toBe(2);
+  });
+
+  test("combining --json-file with --json-stdin is a usage error (exit 2)", () => {
+    const file = writeJson(engineerObj);
+    const { io } = fakeIo();
+    expect(runCli(["parse-agent", "engineer", "--json-file", file, "--json-stdin"], io)).toBe(2);
+  });
+
+  test("pm --json-file with empty CORRECT instructions is rejected (refinement enforced)", () => {
+    const file = writeJson({
+      decision: "CORRECT",
+      rationale: "needs work",
+      instructions: [],
+      decision_id: "D-001",
+      journal_entry: "x",
+      human_gate_required: false,
+    });
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "pm", "--json-file", file], io);
+    expect(code).toBe(1);
+    expect(JSON.parse(out.join("\n")).ok).toBe(false);
+  });
+
+  test("pm --json-file --expected-decision-id mismatch fails with DECISION_ID_MISMATCH", () => {
+    const file = writeJson({
+      decision: "PASS",
+      rationale: "ok",
+      decision_id: "D-001",
+      journal_entry: "x",
+      human_gate_required: true,
+    });
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "pm", "--json-file", file, "--expected-decision-id", "D-002"], io);
+    expect(code).toBe(1);
+    const parsed = JSON.parse(out.join("\n")) as { code: string; expected: string; actual: string };
+    expect(parsed.code).toBe("DECISION_ID_MISMATCH");
+    expect(parsed.expected).toBe("D-002");
+    expect(parsed.actual).toBe("D-001");
+  });
+
+  test("pm --json-file --expected-decision-id match passes (exit 0)", () => {
+    const file = writeJson({
+      decision: "PASS",
+      rationale: "ok",
+      decision_id: "D-005",
+      journal_entry: "x",
+      human_gate_required: true,
+    });
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "pm", "--json-file", file, "--expected-decision-id", "D-005"], io);
+    expect(code).toBe(0);
+    expect(JSON.parse(out.join("\n")).ok).toBe(true);
+  });
+});
+
+describe("runCli agent-schema (JSON Schema emitter)", () => {
+  for (const role of ["engineer", "semantic-verifier", "scope-verifier", "pm"] as const) {
+    test(`emits a JSON Schema for ${role} with additionalProperties:false and required`, () => {
+      const { io, out } = fakeIo();
+      const code = runCli(["agent-schema", role], io);
+      expect(code).toBe(0);
+      const schema = JSON.parse(out.join("\n")) as {
+        type: string;
+        additionalProperties: boolean;
+        required: string[];
+      };
+      expect(schema.type).toBe("object");
+      expect(schema.additionalProperties).toBe(false);
+      expect(Array.isArray(schema.required)).toBe(true);
+      expect(schema.required.length).toBeGreaterThan(0);
+    });
+  }
+
+  test("engineer schema enumerates commands_run.result via enum", () => {
+    const { io, out } = fakeIo();
+    runCli(["agent-schema", "engineer"], io);
+    expect(out.join("\n")).toContain("\"pass\"");
+    expect(out.join("\n")).toContain("\"fail\"");
+  });
+
+  test("pm schema enumerates the decision enum", () => {
+    const { io, out } = fakeIo();
+    runCli(["agent-schema", "pm"], io);
+    const text = out.join("\n");
+    expect(text).toContain("PASS");
+    expect(text).toContain("CORRECT");
+    expect(text).toContain("ESCALATE");
+  });
+
+  test("rejects an unknown role with usage (exit 2)", () => {
+    const { io } = fakeIo();
+    expect(runCli(["agent-schema", "wizard"], io)).toBe(2);
+  });
+
+  test("rejects a missing role with usage (exit 2)", () => {
+    const { io } = fakeIo();
+    expect(runCli(["agent-schema"], io)).toBe(2);
+  });
+});

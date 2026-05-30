@@ -1,21 +1,25 @@
-import { z } from "zod";
+import { z } from "zod/v4";
 
-import { NonEmptyStringSchema, TicketIdSchema } from "../schema/enums.js";
-
+// Local zod/v4 primitives. The role schemas are the single source of truth for
+// both Core validation (safeParse) and JSON Schema generation (z.toJSONSchema),
+// so they declare their own zod/v4 primitives rather than importing the Zod-3
+// contract primitives from ../schema/enums.js (which z.toJSONSchema cannot convert).
+const NonEmpty = z.string().trim().min(1);
+const TicketId = z.string().regex(/^T\d{2,}$/);
 const NonNegInt = z.number().int().nonnegative();
 
 /** Engineer change-set output (see the forge-engineer charter). */
 export const EngineerOutputSchema = z
   .object({
-    ticket: TicketIdSchema,
-    summary: NonEmptyStringSchema,
+    ticket: TicketId,
+    summary: NonEmpty,
     files_changed: z.array(
-      z.object({ path: NonEmptyStringSchema, adds: NonNegInt, dels: NonNegInt }).strict(),
+      z.object({ path: NonEmpty, adds: NonNegInt, dels: NonNegInt }).strict(),
     ),
     tests: z.object({ added: NonNegInt, changed: NonNegInt }).strict(),
-    commands_run: z.array(z.object({ cmd: NonEmptyStringSchema, result: z.enum(["pass", "fail"]) }).strict()),
-    risks: z.array(NonEmptyStringSchema).default([]),
-    deviations: z.array(NonEmptyStringSchema).default([]),
+    commands_run: z.array(z.object({ cmd: NonEmpty, result: z.enum(["pass", "fail"]) }).strict()),
+    risks: z.array(NonEmpty).default([]),
+    deviations: z.array(NonEmpty).default([]),
     within_allowed_paths: z.boolean(),
   })
   .strict();
@@ -30,9 +34,9 @@ export const SemanticVerifierOutputSchema = z
     acceptance_checked: z.array(
       z
         .object({
-          id: z.union([NonEmptyStringSchema, z.number()]),
+          id: z.union([NonEmpty, z.number()]),
           status: z.enum(["met", "unmet"]),
-          evidence: NonEmptyStringSchema,
+          evidence: NonEmpty,
         })
         .strict(),
     ),
@@ -40,13 +44,13 @@ export const SemanticVerifierOutputSchema = z
       z
         .object({
           severity: FindingSeverityEnum,
-          claim: NonEmptyStringSchema,
-          reality: NonEmptyStringSchema,
-          evidence: NonEmptyStringSchema,
+          claim: NonEmpty,
+          reality: NonEmpty,
+          evidence: NonEmpty,
         })
         .strict(),
     ),
-    missing_proof: z.array(NonEmptyStringSchema).default([]),
+    missing_proof: z.array(NonEmpty).default([]),
     risk_level: z.enum(["low", "medium", "high", "critical"]),
   })
   .strict();
@@ -55,11 +59,11 @@ export const SemanticVerifierOutputSchema = z
 export const ScopeVerifierOutputSchema = z
   .object({
     verdict: VerdictEnum,
-    changed_files: z.array(NonEmptyStringSchema).default([]),
+    changed_files: z.array(NonEmpty).default([]),
     allowed_path_status: z.enum(["clean", "violations"]),
-    forbidden_path_violations: z.array(NonEmptyStringSchema).default([]),
-    unexpected_files: z.array(NonEmptyStringSchema).default([]),
-    recommendation: NonEmptyStringSchema,
+    forbidden_path_violations: z.array(NonEmpty).default([]),
+    unexpected_files: z.array(NonEmpty).default([]),
+    recommendation: NonEmpty,
   })
   .strict();
 
@@ -69,17 +73,17 @@ const PMDecisionEnum = z.enum(["PASS", "CORRECT", "ESCALATE"]);
 export const PMOutputSchema = z
   .object({
     decision: PMDecisionEnum,
-    rationale: NonEmptyStringSchema,
-    instructions: z.array(NonEmptyStringSchema).default([]),
+    rationale: NonEmpty,
+    instructions: z.array(NonEmpty).default([]),
     decision_id: z.string().regex(/^D-\d+$/, "decision_id must match D-<digits> (e.g. D-001)"),
-    journal_entry: NonEmptyStringSchema,
+    journal_entry: NonEmpty,
     human_gate_required: z.boolean(),
   })
   .strict()
   .superRefine((pm, ctx) => {
     if (pm.decision === "CORRECT" && pm.instructions.length === 0) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: "a CORRECT decision must include at least one instruction",
         path: ["instructions"],
       });
@@ -90,3 +94,24 @@ export type EngineerOutput = z.infer<typeof EngineerOutputSchema>;
 export type SemanticVerifierOutput = z.infer<typeof SemanticVerifierOutputSchema>;
 export type ScopeVerifierOutput = z.infer<typeof ScopeVerifierOutputSchema>;
 export type PMOutput = z.infer<typeof PMOutputSchema>;
+
+/** Role identifiers for output validation and dispatch. */
+export type AgentRole = "engineer" | "semantic-verifier" | "scope-verifier" | "pm";
+
+/** The role-output schema map — the single source of truth for both safeParse and JSON Schema. */
+export const ROLE_SCHEMAS = {
+  engineer: EngineerOutputSchema,
+  "semantic-verifier": SemanticVerifierOutputSchema,
+  "scope-verifier": ScopeVerifierOutputSchema,
+  pm: PMOutputSchema,
+} as const satisfies Record<AgentRole, z.ZodType>;
+
+/**
+ * Emit the JSON Schema for a role's output, derived from the same zod/v4 schema
+ * Core validates against. The future workflow runner uses this for `agent({schema})`;
+ * Core still re-validates with safeParse (refinements, patterns, bounds, and
+ * non-emptiness are enforced only by the Zod pass, not by JSON Schema).
+ */
+export function toRoleJsonSchema(role: AgentRole): unknown {
+  return z.toJSONSchema(ROLE_SCHEMAS[role]);
+}
