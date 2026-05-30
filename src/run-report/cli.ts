@@ -21,9 +21,9 @@ const USAGE =
   "         --checkpoint-head <sha>\n" +
   "         --guard-result <string>\n" +
   "         --guard-exit <int>\n" +
-  "         --gate-declared <none|pr|merge|phase|manual>\n" +
-  "         --gate-effective <none|pr|merge|phase|manual>\n" +
-  "         --gate-human-required <true|false>\n" +
+  "         [--gate-declared <none|pr|merge|phase|manual>] (optional cross-check)\n" +
+  "         [--gate-effective <none|pr|merge|phase|manual>] (optional cross-check)\n" +
+  "         [--gate-human-required <true|false>] (optional cross-check)\n" +
   "         [--engineer-output <path>] [--semantic-output <path>] [--scope-output <path>]\n" +
   "         [--pm-output <path>] [--facts <path>] [--active-ticket <path>]\n" +
   "         [--out <path>]\n" +
@@ -86,6 +86,8 @@ type FailureCode =
   | "AGENT_OUTPUT_INVALID"
   | "FACTS_INVALID"
   | "ACTIVE_TICKET_INVALID"
+  | "GATE_SOURCE_MISSING"
+  | "GATE_PROVENANCE_MISMATCH"
   | "HUMAN_GATE_MISMATCH"
   | "RESULT_REQUIRES_GREEN"
   | "RUN_REPORT_INVALID"
@@ -122,11 +124,10 @@ export function runWriteRunReport(args: string[], cli: CliIo, io: RunReportIo): 
   const checkpointHead = flagValue(rest, "--checkpoint-head");
   const guardResult = flagValue(rest, "--guard-result");
   const guardExitRaw = flagValue(rest, "--guard-exit");
-  // Authoritative effective-gate flags supplied by the orchestrator from the
-  // Core-derived dry-run/packets state. The assembler's HUMAN_GATE_MISMATCH
-  // check compares pm-output's `human_gate_required` against the value pinned
-  // here; deriving it from the PM output itself would make the check
-  // tautological.
+  // Effective-gate flags are now OPTIONAL cross-checks. The authoritative gate
+  // is sourced from the active-ticket (Core file → Core file). If any of these
+  // are supplied they must equal the active-ticket gate, else
+  // GATE_PROVENANCE_MISMATCH. There is no flag fallback — pure-strict.
   const gateDeclared = flagValue(rest, "--gate-declared");
   const gateEffective = flagValue(rest, "--gate-effective");
   const gateHumanRequiredRaw = flagValue(rest, "--gate-human-required");
@@ -138,14 +139,11 @@ export function runWriteRunReport(args: string[], cli: CliIo, io: RunReportIo): 
     checkpointBase === undefined ||
     checkpointHead === undefined ||
     guardResult === undefined ||
-    guardExitRaw === undefined ||
-    gateDeclared === undefined ||
-    gateEffective === undefined ||
-    gateHumanRequiredRaw === undefined
+    guardExitRaw === undefined
   ) {
     return usage(
       cli,
-      "run-report write requires --repo-root, --result, --ticket-title, --checkpoint-base, --checkpoint-head, --guard-result, --guard-exit, --gate-declared, --gate-effective, --gate-human-required",
+      "run-report write requires --repo-root, --result, --ticket-title, --checkpoint-base, --checkpoint-head, --guard-result, --guard-exit",
     );
   }
 
@@ -156,13 +154,18 @@ export function runWriteRunReport(args: string[], cli: CliIo, io: RunReportIo): 
   if (!Number.isInteger(guardExit)) {
     return usage(cli, `--guard-exit must be an integer; got ${JSON.stringify(guardExitRaw)}`);
   }
-  if (gateHumanRequiredRaw !== "true" && gateHumanRequiredRaw !== "false") {
+  // When supplied, --gate-human-required must still be a well-formed boolean
+  // before it can be used as a cross-check value.
+  if (
+    gateHumanRequiredRaw !== undefined &&
+    gateHumanRequiredRaw !== "true" &&
+    gateHumanRequiredRaw !== "false"
+  ) {
     return usage(
       cli,
       `--gate-human-required must be true or false; got ${JSON.stringify(gateHumanRequiredRaw)}`,
     );
   }
-  const gateHumanRequired = gateHumanRequiredRaw === "true";
 
   const forgeDir = joinForge(epicPath);
   const inputs = {
@@ -230,21 +233,52 @@ export function runWriteRunReport(args: string[], cli: CliIo, io: RunReportIo): 
     return fail(cli, "ACTIVE_TICKET_INVALID", [activeParsed.message]);
   }
 
-  // Effective-gate cross-check input: the orchestrator supplies the
-  // authoritative gate (Core-derived from the active run / packets / dry-run),
-  // and the assembler verifies the PM emission's `human_gate_required` matches
-  // it. Deriving the gate from the PM output here would make
-  // `HUMAN_GATE_MISMATCH` tautological — see the engineer-flagged risk noted
-  // in PR #6's review.
+  // The active-ticket is the single source of truth for the effective gate
+  // (Core file → Core file). Pure-strict: there is no flag fallback. An
+  // active-ticket without a gate is a hard failure, not a silently-defaulted
+  // run — this closes the gate-provenance seam under both the Markdown fallback
+  // and the future workflow-backed runner.
+  const sourcedGate = activeParsed.ticket.gate;
+  if (sourcedGate === undefined) {
+    return fail(cli, "GATE_SOURCE_MISSING", [
+      `active-ticket has no gate; the effective gate must be sourced from ${inputs.activeTicket}`,
+    ]);
+  }
+
+  // The --gate-* flags are optional cross-checks only. When supplied they must
+  // equal the active-ticket gate; any disagreement is GATE_PROVENANCE_MISMATCH.
+  // This keeps the orchestrator's flags honest without letting them override the
+  // Core-sourced gate (which would re-open the provenance seam, and would make
+  // HUMAN_GATE_MISMATCH tautological).
+  const provenanceMismatches: string[] = [];
+  if (gateDeclared !== undefined && gateDeclared !== sourcedGate.declared) {
+    provenanceMismatches.push(
+      `--gate-declared=${gateDeclared} disagrees with active-ticket gate.declared=${sourcedGate.declared}`,
+    );
+  }
+  if (gateEffective !== undefined && gateEffective !== sourcedGate.effective) {
+    provenanceMismatches.push(
+      `--gate-effective=${gateEffective} disagrees with active-ticket gate.effective=${sourcedGate.effective}`,
+    );
+  }
+  if (gateHumanRequiredRaw !== undefined && (gateHumanRequiredRaw === "true") !== sourcedGate.human_required) {
+    provenanceMismatches.push(
+      `--gate-human-required=${gateHumanRequiredRaw} disagrees with active-ticket gate.human_required=${sourcedGate.human_required}`,
+    );
+  }
+  if (provenanceMismatches.length > 0) {
+    return fail(cli, "GATE_PROVENANCE_MISMATCH", provenanceMismatches);
+  }
+
   const commitGate = collectCommitGateMaterials(rest);
   const notes = collectNotes(rest);
   const runtime: RuntimeMetadata = {
     result,
     ticket_title: ticketTitle,
     effective_gate: {
-      declared: gateDeclared,
-      effective: gateEffective,
-      human_required: gateHumanRequired,
+      declared: sourcedGate.declared,
+      effective: sourcedGate.effective,
+      human_required: sourcedGate.human_required,
     },
     checkpoint: { base: checkpointBase, head: checkpointHead },
     guard: { result: guardResult, exit: guardExit },

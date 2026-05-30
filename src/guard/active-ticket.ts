@@ -13,10 +13,25 @@ export const ACTIVE_TICKET_SCHEMA = "forge-active-ticket/v1";
  *
  * Deliberately NOT `.strict()` (the one considered exception to the project's
  * strict-everywhere rule): the orchestration shell also records operational fields
- * (gate, phase, timestamp, epic, sprint) the guard ignores. Tolerating and
+ * (phase, timestamp, epic, sprint) the guard ignores. Tolerating and
  * stripping unknown keys keeps this a forward-compatible producer/consumer
  * boundary. Missing *required* fields still fail loudly — never silently accepted.
+ *
+ * The `gate` object is the one operational field promoted to a typed, optional
+ * member: it is the single source of truth for the effective gate (the run-report
+ * writer sources `runtime.effective_gate` from here, not from CLI flags). The
+ * nested object is `.strict()` so a malformed gate is rejected rather than
+ * silently stripped — but the guard's path fence still ignores it entirely
+ * (`fenceOf` is unchanged).
  */
+const GateSchema = z
+  .object({
+    declared: z.string().min(1),
+    effective: z.string().min(1),
+    human_required: z.boolean(),
+  })
+  .strict();
+
 export const ActiveTicketSchema = z.object({
   schema: z.literal(ACTIVE_TICKET_SCHEMA),
   // Must be absolute: the guard rejects wrong-cwd evidence by comparing the worktree
@@ -29,6 +44,7 @@ export const ActiveTicketSchema = z.object({
   allowed_paths: z.array(z.string()),
   forbidden_paths: z.array(z.string()),
   protected_paths: z.array(z.string()),
+  gate: GateSchema.optional(),
 });
 
 export type ActiveTicket = z.infer<typeof ActiveTicketSchema>;

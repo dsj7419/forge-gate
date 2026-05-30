@@ -862,6 +862,9 @@ describe("runCli run-report write routing", () => {
         allowed_paths: ["src/sandbox/**"],
         forbidden_paths: ["package.json"],
         protected_paths: ["**/manifest.yaml"],
+        // Pure-strict gate provenance: the effective gate is sourced from the
+        // active-ticket. Matches the --gate-* cross-check flags + PM gate below.
+        gate: { declared: "pr", effective: "pr", human_required: true },
       }),
     };
 
