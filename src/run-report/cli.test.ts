@@ -62,6 +62,9 @@ const ACTIVE_TICKET_JSON = JSON.stringify({
   allowed_paths: ["src/sandbox/**"],
   forbidden_paths: ["package.json"],
   protected_paths: ["**/manifest.yaml"],
+  // The active-ticket is the source of truth for the effective gate. Matches
+  // baseArgs' --gate-* cross-check values and PM_YAML's human_gate_required.
+  gate: { declared: "pr", effective: "pr", human_required: true },
 });
 
 const defaultPaths = {
@@ -380,11 +383,11 @@ describe("forge run-report write — authoritative gate cross-check (HUMAN_GATE_
   // orchestrator (not from the PM output). These tests prove the cross-check
   // is reachable through the CLI, not just through the assembler unit tests.
 
-  test("PM emits human_gate_required:false but --gate-human-required true → HUMAN_GATE_MISMATCH (exit 1)", () => {
+  test("PM emits human_gate_required:false but the active-ticket gate says true → HUMAN_GATE_MISMATCH (exit 1)", () => {
     const fs = defaultFs();
     fs[defaultPaths.pm] = PM_YAML.replace("human_gate_required: true", "human_gate_required: false");
     const { cli, reportIo, out, writes } = makeIo(fs);
-    // baseArgs pins --gate-human-required true; PM disagrees.
+    // The active-ticket gate (source of truth) has human_required:true; PM disagrees.
     const code = runWriteRunReport(baseArgs, cli, reportIo);
     expect(code).toBe(1);
     const parsed = JSON.parse(out.join("\n")) as { code: string };
@@ -392,22 +395,67 @@ describe("forge run-report write — authoritative gate cross-check (HUMAN_GATE_
     expect(writes).toEqual([]); // mismatch must not produce a written report
   });
 
-  test("PM emits human_gate_required:true but --gate-human-required false → HUMAN_GATE_MISMATCH (exit 1)", () => {
-    // Symmetric direction: PM says human-required, orchestrator says not.
-    const argsWithFalseGate = baseArgs.map((arg, index) => {
-      if (index > 0 && baseArgs[index - 1] === "--gate-human-required") return "false";
-      return arg;
+  test("PM emits human_gate_required:true but the active-ticket gate says false → HUMAN_GATE_MISMATCH (exit 1)", () => {
+    // Symmetric direction: PM says human-required, the Core gate source says not.
+    const fs = defaultFs();
+    fs[defaultPaths.activeTicket] = JSON.stringify({
+      schema: "forge-active-ticket/v1",
+      repo_root: "/repo",
+      epic_path: EPIC,
+      ticket: "T01",
+      branch: "forge/example/T01-add",
+      allowed_paths: ["src/sandbox/**"],
+      forbidden_paths: ["package.json"],
+      protected_paths: ["**/manifest.yaml"],
+      gate: { declared: "none", effective: "none", human_required: false },
     });
-    const { cli, reportIo, out } = makeIo();
-    const code = runWriteRunReport(argsWithFalseGate, cli, reportIo);
+    // Drop the matching --gate-* flags (which would otherwise mismatch the new
+    // active-ticket gate and fire GATE_PROVENANCE_MISMATCH first). The gate now
+    // comes purely from the active-ticket.
+    const argsNoGate = baseArgs.filter((arg, index) => {
+      if (arg === "--gate-declared" || arg === "--gate-effective" || arg === "--gate-human-required") return false;
+      if (
+        index > 0 &&
+        (baseArgs[index - 1] === "--gate-declared" ||
+          baseArgs[index - 1] === "--gate-effective" ||
+          baseArgs[index - 1] === "--gate-human-required")
+      ) {
+        return false;
+      }
+      return true;
+    });
+    const { cli, reportIo, out } = makeIo(fs);
+    const code = runWriteRunReport(argsNoGate, cli, reportIo);
     expect(code).toBe(1);
     const parsed = JSON.parse(out.join("\n")) as { code: string };
     expect(parsed.code).toBe("HUMAN_GATE_MISMATCH");
   });
 
+  test("HUMAN_GATE_MISMATCH cannot be made tautological by passing the PM value as --gate-human-required", () => {
+    // PM says false; the orchestrator naively echoes false on the flag. Because
+    // the gate is sourced from the active-ticket (human_required:true), the flag
+    // cannot suppress the mismatch — it either matches the source (here it does
+    // not → GATE_PROVENANCE_MISMATCH) or is ignored as a cross-check, never the
+    // source. Either way the run does not silently pass.
+    const fs = defaultFs();
+    fs[defaultPaths.pm] = PM_YAML.replace("human_gate_required: true", "human_gate_required: false");
+    const argsEchoPm = baseArgs.map((arg, index) => {
+      if (index > 0 && baseArgs[index - 1] === "--gate-human-required") return "false";
+      return arg;
+    });
+    const { cli, reportIo, out, writes } = makeIo(fs);
+    const code = runWriteRunReport(argsEchoPm, cli, reportIo);
+    expect(code).toBe(1);
+    const parsed = JSON.parse(out.join("\n")) as { code: string };
+    // The flag disagrees with the Core gate source, so provenance fails before
+    // the assembler — the tautology is structurally impossible.
+    expect(parsed.code).toBe("GATE_PROVENANCE_MISMATCH");
+    expect(writes).toEqual([]);
+  });
+
   test("matching authoritative gate and PM emission → success", () => {
-    // The default test path: PM_YAML says human_gate_required:true and
-    // baseArgs says --gate-human-required true. The cross-check must NOT
+    // The default test path: PM_YAML says human_gate_required:true and the
+    // active-ticket gate has human_required:true. The cross-check must NOT
     // fire and a report must be written.
     const { cli, reportIo, writes } = makeIo();
     const code = runWriteRunReport(baseArgs, cli, reportIo);
@@ -416,29 +464,80 @@ describe("forge run-report write — authoritative gate cross-check (HUMAN_GATE_
   });
 });
 
-describe("forge run-report write — gate flag validation", () => {
-  test("missing --gate-human-required surfaces a usage error (exit 2)", () => {
-    const argsWithoutGateHR = baseArgs.filter((arg, index) => {
-      if (arg === "--gate-human-required") return false;
-      if (index > 0 && baseArgs[index - 1] === "--gate-human-required") return false;
+describe("forge run-report write — gate flags are optional cross-checks", () => {
+  // Helper to drop a flag and its value from an args array.
+  const without = (args: string[], flag: string): string[] =>
+    args.filter((arg, index) => {
+      if (arg === flag) return false;
+      if (index > 0 && args[index - 1] === flag) return false;
       return true;
     });
-    const { cli, reportIo, err } = makeIo();
-    const code = runWriteRunReport(argsWithoutGateHR, cli, reportIo);
-    expect(code).toBe(2);
-    expect(err.join("\n")).toMatch(/gate-human-required|gate/i);
+
+  test("no --gate-* flags at all → succeeds, gate sourced from the active-ticket", () => {
+    const argsNoGate = without(without(without(baseArgs, "--gate-human-required"), "--gate-declared"), "--gate-effective");
+    const { cli, reportIo, writes, state } = makeIo();
+    const code = runWriteRunReport(argsNoGate, cli, reportIo);
+    expect(code).toBe(0);
+    expect(writes).toHaveLength(1);
+    const parsed = JSON.parse(state[defaultPaths.outDefault] ?? "") as {
+      gate: { declared: string; effective: string; human_required: boolean };
+    };
+    // Gate came from the active-ticket, not flags.
+    expect(parsed.gate).toEqual({ declared: "pr", effective: "pr", human_required: true });
   });
 
-  test("missing --gate-declared surfaces a usage error (exit 2)", () => {
-    const argsWithoutGateDeclared = baseArgs.filter((arg, index) => {
-      if (arg === "--gate-declared") return false;
-      if (index > 0 && baseArgs[index - 1] === "--gate-declared") return false;
-      return true;
+  test("supplied --gate-* values that match the active-ticket gate → success", () => {
+    const { cli, reportIo, writes } = makeIo();
+    const code = runWriteRunReport(baseArgs, cli, reportIo);
+    expect(code).toBe(0);
+    expect(writes).toHaveLength(1);
+  });
+
+  test("supplied --gate-effective disagreeing with the active-ticket → GATE_PROVENANCE_MISMATCH (exit 1)", () => {
+    const argsBadEffective = baseArgs.map((arg, index) => {
+      if (index > 0 && baseArgs[index - 1] === "--gate-effective") return "merge";
+      return arg;
     });
-    const { cli, reportIo, err } = makeIo();
-    const code = runWriteRunReport(argsWithoutGateDeclared, cli, reportIo);
-    expect(code).toBe(2);
-    expect(err.join("\n")).toMatch(/gate-declared|gate/i);
+    const { cli, reportIo, out, writes } = makeIo();
+    const code = runWriteRunReport(argsBadEffective, cli, reportIo);
+    expect(code).toBe(1);
+    const parsed = JSON.parse(out.join("\n")) as { code: string };
+    expect(parsed.code).toBe("GATE_PROVENANCE_MISMATCH");
+    expect(writes).toEqual([]);
+  });
+
+  test("supplied --gate-human-required disagreeing with the active-ticket → GATE_PROVENANCE_MISMATCH (exit 1)", () => {
+    const argsBadHr = baseArgs.map((arg, index) => {
+      if (index > 0 && baseArgs[index - 1] === "--gate-human-required") return "false";
+      return arg;
+    });
+    const { cli, reportIo, out, writes } = makeIo();
+    const code = runWriteRunReport(argsBadHr, cli, reportIo);
+    expect(code).toBe(1);
+    const parsed = JSON.parse(out.join("\n")) as { code: string };
+    expect(parsed.code).toBe("GATE_PROVENANCE_MISMATCH");
+    expect(writes).toEqual([]);
+  });
+
+  test("an active-ticket with no gate → GATE_SOURCE_MISSING (exit 1)", () => {
+    const fs = defaultFs();
+    fs[defaultPaths.activeTicket] = JSON.stringify({
+      schema: "forge-active-ticket/v1",
+      repo_root: "/repo",
+      epic_path: EPIC,
+      ticket: "T01",
+      branch: "forge/example/T01-add",
+      allowed_paths: ["src/sandbox/**"],
+      forbidden_paths: ["package.json"],
+      protected_paths: ["**/manifest.yaml"],
+      // intentionally no gate
+    });
+    const { cli, reportIo, out, writes } = makeIo(fs);
+    const code = runWriteRunReport(baseArgs, cli, reportIo);
+    expect(code).toBe(1);
+    const parsed = JSON.parse(out.join("\n")) as { code: string };
+    expect(parsed.code).toBe("GATE_SOURCE_MISSING");
+    expect(writes).toEqual([]);
   });
 
   test("--gate-human-required other than true|false surfaces a usage error (exit 2)", () => {

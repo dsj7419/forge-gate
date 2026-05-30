@@ -30,10 +30,15 @@ describe("buildActiveTicket", () => {
     expect(ticket.protected_paths).toEqual(["**/manifest.yaml"]);
   });
 
-  test("emits only v1 fields — the operational gate/sprint are not carried", () => {
+  test("emits the gate from ActiveRun.gate (the effective-gate source of truth)", () => {
     const ticket = buildActiveTicket(activeRun);
 
-    expect(ticket).not.toHaveProperty("gate");
+    expect(ticket.gate).toEqual({ declared: "pr", effective: "pr", human_required: true });
+  });
+
+  test("does not carry the operational sprint field", () => {
+    const ticket = buildActiveTicket(activeRun);
+
     expect(ticket).not.toHaveProperty("sprint");
   });
 

@@ -6,8 +6,9 @@ import { generateRunPackets, type ActiveRun } from "../orchestrator/packets.js";
  *
  * It validates against the consumer's `ActiveTicketSchema`, so the producer can
  * never emit something the guard would reject (and the v1 fields are taken
- * verbatim from the deterministic packet — no hand-authored shape). Operational
- * fields the packet also carries (gate, sprint) are intentionally not emitted.
+ * verbatim from the deterministic packet — no hand-authored shape). The `gate`
+ * is emitted from `ActiveRun.gate` so the active-ticket is the single source of
+ * truth for the effective gate; the operational `sprint` field stays out.
  */
 export function buildActiveTicket(activeRun: ActiveRun): ActiveTicket {
   return ActiveTicketSchema.parse({
@@ -19,6 +20,7 @@ export function buildActiveTicket(activeRun: ActiveRun): ActiveTicket {
     allowed_paths: activeRun.allowed_paths,
     forbidden_paths: activeRun.forbidden_paths,
     protected_paths: activeRun.protected_paths,
+    gate: activeRun.gate,
   });
 }
 
