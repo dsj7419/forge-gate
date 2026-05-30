@@ -18,6 +18,7 @@ allowed_paths:
   - src/run-report/cli.test.ts
   - src/run-report/assemble.ts
   - src/run-report/assemble.test.ts
+  - src/cli/run.test.ts
 gate: pr
 gate_override: false
 verifier: two-pass
@@ -89,6 +90,13 @@ Four mechanical changes:
    against `runtime.effective_gate` and builds the report gate from it; once `cli.ts` sources
    `runtime.effective_gate` from the active-ticket, the assembler needs no logic change. `assemble.ts`
    and `assemble.test.ts` are in `allowed_paths` only as headroom; prefer not to change their logic.
+
+5. **`src/cli/run.test.ts` is allowed ONLY for the existing fixture.** `src/cli/run.test.ts` holds a
+   `run-report write` CLI integration fixture whose active-ticket still encodes the OLD flag-sourced gate
+   behavior (active-ticket without a `gate`, plus `--gate-*` flags). Under pure-strict gate provenance that
+   fixture must now expect `GATE_SOURCE_MISSING` (or be given a `gate`), so it requires a minimal update.
+   **This path is allowed solely to update that existing fixture — no CLI router/source changes are
+   allowed.** `src/cli/run.ts` remains forbidden; do not widen to `src/cli/**`; do not add new features.
 
 ## Out of Scope
 
