@@ -1,0 +1,8 @@
+schema_version: 1
+id: forge-gate-provenance
+title: Core-owned gate provenance (active-ticket is the source of truth)
+sprints:
+  - sprint-01-gate-provenance
+gate_policy:
+  default_push: human
+  default_merge: human
