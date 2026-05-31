@@ -51,6 +51,18 @@ export type RuntimeMetadata = {
   };
   /** Optional narrative notes (transport noise, bootstrap caveats, follow-ups). Never new top-level fields. */
   notes?: string[];
+  /**
+   * Optional per-role trust-path provenance — which evidence path produced each
+   * agent output. Explicit orchestrator-supplied runtime metadata; NOT derived
+   * from the captured outputs and NOT routed through OrchestratorConfirmedFacts.
+   * Each role is individually optional.
+   */
+  agent_output_source?: {
+    engineer?: "yaml_text" | "structured_json" | "workflow_core_runner";
+    semantic_verifier?: "yaml_text" | "structured_json" | "workflow_core_runner";
+    scope_verifier?: "yaml_text" | "structured_json" | "workflow_core_runner";
+    pm?: "yaml_text" | "structured_json" | "workflow_core_runner";
+  };
 };
 
 export type AssembleFailureCode =
@@ -182,6 +194,9 @@ export function assembleRunReport(inputs: AssembleInputs): AssembleResult {
             suggested_commands: [...runtime.commit_gate_materials.suggested_commands],
           },
         }
+      : {}),
+    ...(runtime.agent_output_source !== undefined
+      ? { agent_output_source: { ...runtime.agent_output_source } }
       : {}),
     ...(runtime.notes !== undefined && runtime.notes.length > 0
       ? { notes: [...runtime.notes] }

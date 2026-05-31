@@ -145,6 +145,62 @@ describe("RunReportSchema — rejects schema drift", () => {
   });
 });
 
+describe("RunReportSchema — optional agent_output_source (trust-path provenance)", () => {
+  test("accepts a report WITHOUT agent_output_source (backward-compatible)", () => {
+    const parsed = RunReportSchema.safeParse(VALID);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data).not.toHaveProperty("agent_output_source");
+  });
+
+  test("accepts agent_output_source populated with all four known roles", () => {
+    const parsed = RunReportSchema.safeParse({
+      ...VALID,
+      agent_output_source: {
+        engineer: "yaml_text",
+        semantic_verifier: "yaml_text",
+        scope_verifier: "structured_json",
+        pm: "yaml_text",
+      },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  test("accepts each enum value: yaml_text, structured_json, workflow_core_runner", () => {
+    for (const value of ["yaml_text", "structured_json", "workflow_core_runner"]) {
+      const parsed = RunReportSchema.safeParse({
+        ...VALID,
+        agent_output_source: { engineer: value },
+      });
+      expect(parsed.success).toBe(true);
+    }
+  });
+
+  test("accepts a subset of roles (each role individually optional)", () => {
+    const parsed = RunReportSchema.safeParse({
+      ...VALID,
+      agent_output_source: { pm: "structured_json" },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  test("rejects an unknown source value (e.g. made_up)", () => {
+    const parsed = RunReportSchema.safeParse({
+      ...VALID,
+      agent_output_source: { engineer: "made_up" },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  test("rejects an unknown role key inside agent_output_source (inner strict)", () => {
+    const parsed = RunReportSchema.safeParse({
+      ...VALID,
+      agent_output_source: { engineer: "yaml_text", reviewer: "yaml_text" },
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
 describe("RunReportSchema — safety.* booleans are z.literal(false)", () => {
   const SAFETY_FLAGS = [
     "committed",

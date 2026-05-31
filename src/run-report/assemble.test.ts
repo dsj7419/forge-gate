@@ -314,6 +314,47 @@ describe("assembleRunReport — optional commit_gate_materials", () => {
   });
 });
 
+describe("assembleRunReport — optional agent_output_source", () => {
+  test("omits agent_output_source when it is not provided in RuntimeMetadata", () => {
+    const result = assembleRunReport(inputs());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.report).not.toHaveProperty("agent_output_source");
+  });
+
+  test("preserves agent_output_source when it is provided", () => {
+    const runtime: RuntimeMetadata = {
+      ...RUNTIME,
+      agent_output_source: {
+        engineer: "yaml_text",
+        semantic_verifier: "yaml_text",
+        scope_verifier: "structured_json",
+        pm: "yaml_text",
+      },
+    };
+    const result = assembleRunReport(inputs({ runtime }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.report.agent_output_source).toEqual({
+      engineer: "yaml_text",
+      semantic_verifier: "yaml_text",
+      scope_verifier: "structured_json",
+      pm: "yaml_text",
+    });
+  });
+
+  test("preserves a partial agent_output_source (subset of roles)", () => {
+    const runtime: RuntimeMetadata = {
+      ...RUNTIME,
+      agent_output_source: { pm: "structured_json" },
+    };
+    const result = assembleRunReport(inputs({ runtime }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.report.agent_output_source).toEqual({ pm: "structured_json" });
+  });
+});
+
 describe("assembleRunReport — purity", () => {
   test("does not mutate the provided inputs", () => {
     const engineer: EngineerOutput = JSON.parse(JSON.stringify(ENGINEER)) as EngineerOutput;
