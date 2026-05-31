@@ -24,6 +24,69 @@ the source of truth.
   Do **not** use `realpath` here — on Git Bash it yields an MSYS `/tmp`-style path the Windows CLI can misread.
   Every later `$FORGE … "$EPIC"` call must receive this absolute path.
 
+## Capture discipline (read first — non-negotiable)
+
+Every agent output is captured by **one action per step**. For each agent you
+dispatch (engineer, both verifier passes, PM), follow this exact sequence and
+nothing else:
+
+1. **dispatch the agent** — send the charter + packet.
+2. **wait for the actual agent return** — do not proceed until the agent has
+   actually returned its message to you.
+3. **capture the exact returned text verbatim** — copy the agent's real returned
+   message byte-for-byte. No edits, no normalization, no fixes.
+4. **write that verbatim return to the canonical `.forge/<role>-output.yaml`
+   file** — where `<role>` is `engineer`, `semantic-verifier`, `scope-verifier`,
+   or `pm`.
+5. **run `forge parse-agent`** on that file.
+6. **continue only after parse succeeds** — if it does not parse, halt (below).
+
+This is one capture per step. Dispatch is its own step; the verbatim write is its
+own step; `forge parse-agent` is its own step.
+
+### Prohibited (these void the run)
+
+- **pre-writing** agent-output files before or alongside the dispatch.
+- **summarizing** agent output into replacement YAML.
+- **reconstructing** malformed output into something that parses.
+- **composing** schema-valid output on behalf of an agent.
+- **batching** dispatch + capture + parse into the same step.
+- **validating synthesized output** — never run `forge parse-agent` against text
+  you produced rather than captured verbatim from the agent.
+
+### Halt behavior (halt — do not repair)
+
+- If the agent output is **malformed**, parse it as malformed and **halt**
+  (`AGENT_OUTPUT_INVALID`). Do not rewrite it to parse.
+- If the agent output is **missing required fields**, **halt**.
+- If tests fail, **report fail** — do not edit the report to pass.
+- If a verifier rejects, **report reject** — do not soften or override it.
+- **never rewrite an agent response** to make it parse, pass, or accept.
+
+### Honesty about enforcement
+
+This discipline is enforced by **instruction + a protocol-lock test**
+(`src/commands/forge-run-ticket-protocol.test.ts`) plus disclosed-departure
+auditability — **not** by Core structurally preventing a non-compliant capture.
+A determined or careless operator can still synthesize output; the safeguard is
+that any departure must be disclosed, and the lock test prevents the discipline
+text from silently disappearing.
+
+### verify-install implication
+
+`commands/forge-run-ticket.md` is an **installed** file. After this hardening is
+merged, an install refresh is expected: `forge verify-install` will report this
+command **stale** until `pnpm install-commands` is re-run to refresh the
+installed copy.
+
+### Bootstrap note
+
+This protocol text governs the run that executes it. The run that *produces* this
+hardening is therefore governed by the **previously-installed** command text plus
+the operator's memory rule — not by the new text. Only after merge + install
+refresh does this command text itself enforce the capture protocol. That is the
+**bootstrap** gap, and it is expected.
+
 ## Hard constraints (v1 — never violate)
 No commit, push, PR, merge. No status write-back. No journal write. No edits to manifest/ticket/governance/
 contract files. The engineer may edit only the ticket's `allowed_paths`. Every agent runs under `repo_root`;
@@ -52,13 +115,23 @@ Only writes allowed: a branch ref, the engineer's `allowed_paths` edits, and git
    allowed/forbidden/protected paths) and selects the same ticket this run executes. Record checkpoint
    `{base, HEAD}` from `git -C "$TARGET_REPO" rev-parse HEAD`.
 4. **Branch:** `git -C "$TARGET_REPO" switch -c <branch>` (off the integration base, from the clean tree).
+Every agent step below obeys the **Capture discipline** above: dispatch the
+agent → wait for the actual agent return → capture the exact returned text
+verbatim → write it to `.forge/<role>-output.yaml` → run `forge parse-agent` →
+continue only after parse succeeds. Never batch dispatch + capture + parse into
+one step; never pre-write, summarize, reconstruct, compose, or validate
+synthesized output.
+
 5. **Engineer:** `$FORGE dispatch engineer "$EPIC" --repo-root "$TARGET_REPO"` → a dispatch spec `{subagent_type, prompt}`. Dispatch it
-   with the **Task** tool (use `subagent_type` and `prompt` exactly as given). Capture the agent's raw output to
+   with the **Task** tool (use `subagent_type` and `prompt` exactly as given). Wait for the actual agent return,
+   then capture the agent's raw output **verbatim** to
    `$EPIC/.forge/engineer-output.yaml` (the canonical capture path — it preserves evidence for
-   `run-report.json`), then run `$FORGE parse-agent engineer --file "$EPIC/.forge/engineer-output.yaml"`. If `ok:false`
-   → ESCALATE (`AGENT_OUTPUT_INVALID`).
+   `run-report.json`; do not pre-write, summarize, reconstruct, or compose it), then run
+   `$FORGE parse-agent engineer --file "$EPIC/.forge/engineer-output.yaml"`. Continue only after parse succeeds.
+   If `ok:false` → **halt** / ESCALATE (`AGENT_OUTPUT_INVALID`, including missing required fields); never rewrite
+   an agent response to make it parse.
 6. **Verify (independent):** run the ticket's `verify_commands` yourself in `$TARGET_REPO` (do not trust the
-   engineer's claim). Failure → go to CORRECT (step 9).
+   engineer's claim). If tests fail, **report fail** (do not edit the report to pass) → go to CORRECT (step 9).
 7. **Scope check (deterministic guard):** run
    `$FORGE guard paths --active "$EPIC/.forge/active-ticket.json" --repo-root "$TARGET_REPO"`. It compares the worktree
    (`git status --porcelain -z`) to the active ticket's fence and exits 0 only if every change is inside
@@ -67,9 +140,11 @@ Only writes allowed: a branch ref, the engineer's `allowed_paths` edits, and git
    manual `git status` eyeball; the deterministic guard **augments** the scope-verifier (step 8) — it does not
    replace it, both run.
 8. **Verifiers:** dispatch `semantic-verifier` then `scope-verifier` (`$FORGE dispatch <role> "$EPIC" --repo-root "$TARGET_REPO"` → Task).
-   Capture each raw output to `$EPIC/.forge/<role>-output.yaml` (`semantic-verifier-output.yaml`,
-   `scope-verifier-output.yaml`), then `$FORGE parse-agent <role> --file "$EPIC/.forge/<role>-output.yaml"` (invalid →
-   ESCALATE).
+   For each: wait for the actual agent return, then capture each raw output **verbatim** to
+   `$EPIC/.forge/<role>-output.yaml` (`semantic-verifier-output.yaml`,
+   `scope-verifier-output.yaml`), then `$FORGE parse-agent <role> --file "$EPIC/.forge/<role>-output.yaml"`.
+   Continue only after parse succeeds (invalid → **halt** / ESCALATE). If a verifier **rejects**, **report
+   reject** — do not soften, override, or rewrite the agent response.
 9. **PM:** Core owns the `decision_id` for this dispatch — the PM agent never invents it.
    - (a) **Read the ledger via Core.** Read `$EPIC/.forge/decisions-ledger.json` (gitignored, runtime-only,
      alongside `lock.json` and `active-ticket.json`). Missing file = empty ledger; malformed file → STOP
@@ -94,11 +169,13 @@ Only writes allowed: a branch ref, the engineer's `allowed_paths` edits, and git
      --assigned-decision-id "$ASSIGNED_DECISION_ID"`. If that returns `ok:false` (any input invalid,
      or `ASSIGNED_DECISION_ID_REQUIRED`) → ESCALATE; do **not** hand-assemble the prompt. Dispatch the
      returned spec with **Task**.
-   - (e) **Capture + validate + cross-check.** Capture the raw PM output to
-     `$EPIC/.forge/pm-output.yaml`, then run
+   - (e) **Capture + validate + cross-check.** Wait for the actual agent return, then capture the raw PM
+     output **verbatim** to `$EPIC/.forge/pm-output.yaml` (do not pre-write, summarize, reconstruct, or
+     compose it), then run
      `$FORGE parse-agent pm --file "$EPIC/.forge/pm-output.yaml" --expected-decision-id "$ASSIGNED_DECISION_ID"`.
-     If `ok:false` → ESCALATE (schema invalid → `AGENT_OUTPUT_INVALID`; the agent invented or renumbered
-     the id → `DECISION_ID_MISMATCH`).
+     Continue only after parse succeeds. If `ok:false` → **halt** / ESCALATE (schema invalid →
+     `AGENT_OUTPUT_INVALID`; the agent invented or renumbered the id → `DECISION_ID_MISMATCH`); never rewrite
+     an agent response to make it parse.
    - (f) **Ledger append (only on both validations passing).** Only if both the schema validation and the
      cross-check pass, append `{decision_id: $ASSIGNED_DECISION_ID, ticket, branch, ts}` to
      `$EPIC/.forge/decisions-ledger.json`. This append happens **before** `run-report.json` is written.
@@ -138,3 +215,21 @@ Only writes allowed: a branch ref, the engineer's `allowed_paths` edits, and git
     failure faithfully). Release the lock; produce a recovery brief (failure code, decision, changed files,
     checkpoint HEAD, branch, commands, verify results, scope findings, **suggested** cleanup/rollback commands
     — shown, not executed). Leave the branch + working tree intact. Ask the human. Auto-clean only the lock.
+
+## Hard rules (capture discipline)
+
+- Obey the **Capture discipline**: dispatch → wait for the actual agent return →
+  capture verbatim → write to `.forge/<role>-output.yaml` → `forge parse-agent`
+  → continue only after parse succeeds. Never **batching** these into one step.
+- Never **pre-writing**, **summarizing**, **reconstructing**, **composing**, or
+  **validating synthesized output** in place of a verbatim agent capture.
+- If tests fail, **report fail**. If a verifier rejects, **report reject**.
+  **never rewrite an agent response** to make it parse, pass, or accept. Malformed
+  or missing-required-fields output → **halt** (`AGENT_OUTPUT_INVALID`), do not
+  repair.
+- Enforcement is by instruction + the `src/commands/forge-run-ticket-protocol.test.ts`
+  lock test + disclosed-departure auditability, not by Core structurally
+  preventing a non-compliant capture. Because this is an installed command,
+  `verify-install` reports it stale post-merge until `pnpm install-commands`
+  refreshes it; the run that produces this edit is **bootstrap**-governed by the
+  previously-installed text.
