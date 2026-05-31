@@ -1,0 +1,8 @@
+schema_version: 1
+id: forge-decision-id-provenance
+title: Core-owned PM decision-id assignment and ledger append
+sprints:
+  - sprint-01-decision-id-provenance
+gate_policy:
+  default_push: human
+  default_merge: human
