@@ -11,6 +11,9 @@ import { planImport } from "../importer/plan.js";
 import { executeImport } from "../importer/write.js";
 import { buildAgentDispatch, buildPmDispatch, type PmRawInputs } from "../orchestrator/dispatch.js";
 import { generateRunPackets } from "../orchestrator/packets.js";
+import { nextDecisionId } from "../orchestrator/decision-id.js";
+import { readDecisionsLedger, type DecisionsLedgerIo } from "../orchestrator/decisions-ledger.js";
+import { defaultDecisionsLedgerIo, runLedger } from "../orchestrator/ledger-cli.js";
 import { runDryRun } from "../run/dry-run.js";
 import { defaultRunReportIo, runWriteRunReport, type RunReportIo } from "../run-report/cli.js";
 import { buildReport, type ValidationReport } from "../validate/findings.js";
@@ -40,6 +43,7 @@ export type CliIo = {
  */
 export type RunCliOptions = {
   runReportIo?: RunReportIo;
+  decisionsLedgerIo?: DecisionsLedgerIo;
 };
 
 const USAGE =
@@ -49,7 +53,8 @@ const USAGE =
   "       forge import --from-existing <legacy-sprint-path> --out <epic-root> [--dry-run] [--json]\n" +
   "       forge packets <epic-path> [--repo-root <path>]\n" +
   "       forge dispatch <engineer|semantic-verifier|scope-verifier> <epic-path> [--repo-root <path>]\n" +
-  "       forge dispatch pm <epic-path> --assigned-decision-id <D-NNN> [--engineer-output <f> --semantic-output <f> --scope-output <f> --facts <f.json>] [--repo-root <path>]\n" +
+  "       forge dispatch pm <epic-path> [--assigned-decision-id <D-NNN> (optional cross-check)] [--engineer-output <f> --semantic-output <f> --scope-output <f> --facts <f.json>] [--repo-root <path>]\n" +
+  "       forge ledger append <epic> --decision-id <D-NNN> --ticket <ticket> --branch <branch>\n" +
   "       forge parse-agent <role> (--file <path> | --stdin | --json-file <path> | --json-stdin) [--expected-decision-id <D-NNN> (pm only)]\n" +
   "       forge agent-schema <role>\n" +
   "       forge active-ticket <epic-path> [--json] [--repo-root <path>]\n" +
@@ -62,6 +67,10 @@ export function runCli(argv: string[], io: CliIo, options: RunCliOptions = {}): 
 
   if (command === "run-report") {
     return runWriteRunReport(argv.slice(1), io, options.runReportIo ?? defaultRunReportIo);
+  }
+
+  if (command === "ledger") {
+    return runLedger(argv.slice(1), io, options.decisionsLedgerIo ?? defaultDecisionsLedgerIo);
   }
 
   if (command === "validate") {
@@ -121,24 +130,10 @@ export function runCli(argv: string[], io: CliIo, options: RunCliOptions = {}): 
     if (anyPmInput && Object.values(pmInputs).some((value) => value === undefined)) {
       return usageError(io, "dispatch pm input assembly requires --engineer-output, --semantic-output, --scope-output, and --facts");
     }
-    // `dispatch pm` is the orchestrator's path to a Core-pinned monotonic decision id; the
-    // flag is therefore required for the pm role (even without assembled agent inputs) so
-    // the assigned id is always rendered into the PM packet skeleton.
-    if (role === "pm" && assignedDecisionId === undefined) {
-      io.print(
-        JSON.stringify(
-          {
-            ok: false,
-            code: "ASSIGNED_DECISION_ID_REQUIRED",
-            source: "assigned_decision_id",
-            errors: ["`forge dispatch pm` requires --assigned-decision-id <D-NNN> (Core-pinned by the orchestrator)"],
-          },
-          null,
-          2,
-        ),
-      );
-      return 1;
-    }
+    // `--assigned-decision-id` is now an OPTIONAL cross-check. Core itself assigns
+    // the authoritative monotonic id from the per-epic decisions ledger (read
+    // below). When the flag is supplied it must still be well-formed before it can
+    // be compared against Core's computed id.
     if (assignedDecisionId !== undefined && !ASSIGNED_DECISION_ID_PATTERN.test(assignedDecisionId)) {
       io.print(
         JSON.stringify(
@@ -160,7 +155,44 @@ export function runCli(argv: string[], io: CliIo, options: RunCliOptions = {}): 
       io.print(JSON.stringify({ ok: false, blockedReasons: result.blockedReasons }, null, 2));
       return 1;
     }
-    const options = { registeredAvailable: false, agentsDir: path.join(process.cwd(), "agents") };
+    const dispatchOptions = { registeredAvailable: false, agentsDir: path.join(process.cwd(), "agents") };
+
+    // Core-owned decision_id assignment for the pm role. The id is sourced from
+    // `<epic>/.forge/decisions-ledger.json` through Core (the same allocator the
+    // ledger appender uses), never from the flag. `--assigned-decision-id` is an
+    // optional cross-check: omitted → use Core's id; supplied + equal → succeed;
+    // supplied + unequal → DECISION_ID_PROVENANCE_MISMATCH with no prompt rendered.
+    // A missing ledger → D-001; a malformed ledger → LEDGER_INVALID, fail-closed.
+    let coreDecisionId: string | undefined;
+    if (role === "pm") {
+      const ledgerIo = options.decisionsLedgerIo ?? defaultDecisionsLedgerIo;
+      const ledgerFile = ledgerPathFor(dispatchEpic);
+      const ledger = readDecisionsLedger(ledgerFile, ledgerIo);
+      if (!ledger.ok) {
+        io.print(JSON.stringify({ ok: false, code: ledger.code, errors: ledger.errors }, null, 2));
+        return 1;
+      }
+      coreDecisionId = nextDecisionId(ledger.ledger.decisions.map((d) => d.decision_id));
+      if (assignedDecisionId !== undefined && assignedDecisionId !== coreDecisionId) {
+        io.print(
+          JSON.stringify(
+            {
+              ok: false,
+              code: "DECISION_ID_PROVENANCE_MISMATCH",
+              source: "assigned_decision_id",
+              expected: coreDecisionId,
+              actual: assignedDecisionId,
+              errors: [
+                `--assigned-decision-id ${assignedDecisionId} disagrees with Core's computed id ${coreDecisionId} (sourced from ${ledgerFile})`,
+              ],
+            },
+            null,
+            2,
+          ),
+        );
+        return 1;
+      }
+    }
 
     if (anyPmInput) {
       let raw: PmRawInputs;
@@ -170,14 +202,14 @@ export function runCli(argv: string[], io: CliIo, options: RunCliOptions = {}): 
           semantic: fs.readFileSync(pmInputs.semantic as string, "utf8"),
           scope: fs.readFileSync(pmInputs.scope as string, "utf8"),
           facts: fs.readFileSync(pmInputs.facts as string, "utf8"),
-          assignedDecisionId: assignedDecisionId as string,
+          assignedDecisionId: coreDecisionId as string,
         };
       } catch (thrown) {
         const error = thrown instanceof Error ? thrown.message : String(thrown);
         io.print(JSON.stringify({ ok: false, code: "INPUT_FILE_UNREADABLE", error }, null, 2));
         return 1;
       }
-      const pm = buildPmDispatch(result.packets, raw, options);
+      const pm = buildPmDispatch(result.packets, raw, dispatchOptions);
       if (!pm.ok) {
         io.print(JSON.stringify(pm, null, 2));
         return 1;
@@ -194,15 +226,15 @@ export function runCli(argv: string[], io: CliIo, options: RunCliOptions = {}): 
         ...result.packets,
         pm: {
           ...result.packets.pm,
-          inputs: { ...result.packets.pm.inputs, assigned_decision_id: assignedDecisionId as string },
+          inputs: { ...result.packets.pm.inputs, assigned_decision_id: coreDecisionId as string },
         },
       };
-      const dispatch = buildAgentDispatch(role, packetsWithId, options);
+      const dispatch = buildAgentDispatch(role, packetsWithId, dispatchOptions);
       io.print(JSON.stringify(dispatch, null, 2));
       return 0;
     }
 
-    const dispatch = buildAgentDispatch(role, result.packets, options);
+    const dispatch = buildAgentDispatch(role, result.packets, dispatchOptions);
     io.print(JSON.stringify(dispatch, null, 2));
     return 0;
   }
@@ -356,6 +388,11 @@ function flagValue(args: string[], flag: string): string | undefined {
   if (index === -1) return undefined;
   const value = args[index + 1];
   return value !== undefined && !value.startsWith("--") ? value : undefined;
+}
+
+/** Locate the per-epic decisions ledger from a dispatch epic path. */
+function ledgerPathFor(epic: string): string {
+  return `${epic.replace(/[\\/]+$/, "")}/.forge/decisions-ledger.json`;
 }
 
 function runImport(args: string[], io: CliIo): number {
