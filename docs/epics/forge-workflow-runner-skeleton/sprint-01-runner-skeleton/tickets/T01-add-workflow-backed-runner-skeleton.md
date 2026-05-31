@@ -118,6 +118,61 @@ Core CLI). The skeleton proves, in order:
 **No outward actions** occur: no `git commit`, no `git push`, no `gh pr create`, no `gh pr merge`, no status
 write-back, no journal write.
 
+## Required typed core-runner data-flow contract (first-class)
+
+The workflow reaches Core/git/fs ONLY by dispatching `forge-core-runner`. It MUST call it **with a schema** and
+receive a typed result object — never a raw natural-language string. (Empirically verified: a schema'd
+`agent({agentType:'forge-core-runner', schema})` returns a typed object carrying the real command stdout. See
+`docs/workflow-runner-data-flow-respec.md`.)
+
+```ts
+type CoreRunnerResult = {
+  ok: boolean;        // convenience: exit === 0
+  exit: number;       // the AUTHORITATIVE command success/failure signal
+  stdout: string;     // exact command stdout, verbatim (parsed downstream per command)
+  stderr?: string;    // exact stderr (empty when none)
+  command?: string;   // the command run (provenance)
+};
+```
+
+Rules (non-negotiable):
+- `exit` is the authoritative success/failure signal for every Core/git/verify command.
+- `stdout` is parsed **explicitly** by the workflow according to the invoked command (table below).
+- The workflow MUST NEVER read `.ok`, `.exit`, `.result`, `.verdict`, arrays, maps, or any domain field from
+  raw natural-language agent text. The role agents (engineer/verifiers/PM) keep returning typed objects via
+  their own `schema`; the core-runner returns `CoreRunnerResult`.
+
+### Command output classification (how `stdout` is parsed)
+
+| Command | Parse `stdout` as |
+|---|---|
+| `forge validate <epic> --json` | JSON |
+| `forge run <epic> --dry-run --json` | JSON |
+| `forge packets <epic> --repo-root` | JSON |
+| `forge active-ticket <epic> --json --repo-root` | JSON (+ write to `.forge/active-ticket.json`) |
+| `forge agent-schema <role>` | JSON |
+| `forge dispatch <role> <epic> --repo-root …` | JSON |
+| `forge parse-agent <role> --json-file …` | JSON |
+| `forge guard paths … --json` | JSON |
+| `forge ledger append …` | JSON |
+| `forge run-report write …` | exit-signal; on success read the report from `.forge/run-report.json`; parse stdout JSON only on non-zero exit |
+| `git status` / `diff` / `rev-list` / `rev-parse` | text (trim / split lines) |
+| `pnpm test` / `pnpm typecheck` / `pnpm build` | exit-signal ONLY (`result = exit===0 ? 'pass' : 'fail'`) |
+
+### Required helper boundary (parse once, consume typed)
+
+The workflow must route every Core/git call through typed helpers, e.g.:
+```
+runCore(forgeArgs)      -> CoreRunnerResult            // the ONLY schema'd core-runner bridge call
+runCoreJson(forgeArgs)  -> JSON.parse(runCore(...).stdout)   // JSON commands; escalate on bad JSON or non-zero exit
+runCoreOk(forgeArgs)    -> runCore(...).exit === 0     // exit-signal commands (run-report write)
+runGitText(gitArgs)     -> runCore('git -C <repoRoot> …').stdout.trim()
+runGitInt(gitArgs)      -> parseInt(runGitText(...), 10)
+runVerify(cmd)          -> ({ cmd, result: runCore(cmd).exit === 0 ? 'pass' : 'fail' })
+writeForgeFile(path,obj)-> assert(runCore('write … to <path>').ok)   // verify the .forge write succeeded
+```
+**All JSON parsing happens at the helper boundary; no downstream workflow step reads fields off raw agent text.**
+
 ## Required agent_output_source behavior
 
 Because the `forge-core-runner` owns the deterministic capture and persistence of each structured output, the
@@ -184,10 +239,18 @@ The sequence is explicit:
 1. **Engineer** implements the four artifacts (`workflows/forge-run-ticket.workflow.js`,
    `agents/forge-core-runner.md`, `.gitignore`, `.claude/settings.json`). The engineer agent must **not** run
    the workflow proof as part of its implementation step.
-2. After the engineer output parses and the implementation diff is present, the **orchestrator** performs the
-   manual workflow proof on `sandbox-epic` — installing the new agent (`pnpm install-commands`), preparing the
-   branch, launching `workflows/forge-run-ticket.workflow.js` against `sandbox-epic`, and capturing the
-   resulting Core-owned run-report as proof evidence — **before** dispatching the semantic verifier.
+2. After the engineer output parses and the implementation diff is present — and **before** the proof — the
+   **orchestrator dispatches two independent execution-trace reviewers** over the workflow script. They must
+   each confirm: (1) `forge-core-runner` is always called with the `CoreRunnerResult` schema; (2) every Core/git
+   result is consumed through the typed helpers; (3) JSON stdout is parsed explicitly; (4) no field is read from
+   raw agent text; (5) `passGate` is reachable only through real typed results; (6) decision-id provenance is
+   non-tautological; (7) no outward-action stage exists. **If either reviewer finds a blocker, do not run the
+   proof** — correct first. Only once both sign off, the **orchestrator** performs the manual workflow proof on
+   `sandbox-epic` (install the new agent via `pnpm install-commands`, prepare the branch, launch
+   `workflows/forge-run-ticket.workflow.js` against `sandbox-epic`, capture the Core-owned run-report as proof
+   evidence) — **before** dispatching the semantic verifier. (For repo isolation the proof may run in a
+   disposable clone via the workflow's `args.repoRoot`/`args.epic`/`args.forgeBin`; the real repo stays
+   uncommitted.)
 3. The **semantic verifier** reviews **both** (a) the implementation diff and (b) the workflow proof-run
    evidence.
 4. The **PM** may PASS **only if** the proof-run evidence exists and shows:
@@ -214,6 +277,13 @@ never PASS.
 
 - This is assembly over existing Core. Do **not** edit `src/**`. If a step seems to need a Core change, STOP and
   report it in `deviations` — that is a re-scope, not a workaround.
+- **Typed bridge is mandatory.** `forge-core-runner` MUST be dispatched with the `CoreRunnerResult` schema; the
+  workflow consumes Core/git results ONLY through typed helpers (`runCore`/`runCoreJson`/`runCoreOk`/
+  `runGitText`/`runGitInt`/`runVerify`/`writeForgeFile`); JSON `stdout` is parsed explicitly at the helper
+  boundary; `exit` is the success signal; **no field is ever read from raw natural-language agent text.** The
+  role agents keep their own `schema`. Verify `agent({schema})` receives real JSON-Schema objects.
+- **Before any sandbox proof run, the orchestrator dispatches two independent execution-trace reviewers** over
+  the workflow (the seven checks in "Proof-run sequence"). If either finds a blocker, do not run the proof.
 - Keep every trust boundary a Core CLI call. The workflow sequences; Core decides; the human acts outward.
 - The workflow script must contain **no** `agent()` call or stage that issues commit / push / PR / merge.
 - Track only `.claude/settings.json`; never `.claude/settings.local.json`; keep the `.gitignore` exception
@@ -241,8 +311,15 @@ never PASS.
 11. `pnpm build` passes.
 12. `pnpm install-commands` refreshes the new `forge-core-runner` agent.
 13. `verify-install` reports current after the install refresh.
-14. A manual workflow proof on `sandbox-epic` reaches a commit-gate PASS (acceptance evidence).
-15. The proof run's run-report has `agent_output_source.*` = `workflow_core_runner`.
-16. The proof run's run-report has `safety.*` all false.
-17. The proof run's run-report has `final_branch_status.committed` false.
-18. No commit, push, PR, merge, status write-back, or journal write happens during the proof run.
+14. **`forge-core-runner` is always dispatched with the `CoreRunnerResult` schema** (`{ok, exit, stdout, stderr?, command?}`); the workflow never dispatches it schemaless.
+15. **Every Core/git result is consumed through the typed helpers**; all JSON `stdout` parsing happens at the helper boundary; no downstream step reads `.ok`/`.exit`/`.result`/`.verdict`/arrays/objects off raw agent text.
+16. `exit` is the authoritative success/failure signal; `pnpm test/typecheck/build` are treated as exit-signal only; git stdout is treated as text.
+17. `.forge/**` writes are verified (the workflow asserts each `writeForgeFile` succeeded).
+18. Decision-id provenance is non-tautological: `expectedDecisionId` is derived from the ledger (not from PM output) and passed to BOTH `dispatch pm --assigned-decision-id` AND `parse-agent pm --expected-decision-id`.
+19. `forge ledger append` succeeds and run-report PASS is gated on `ledgerAppendOk` (+ both verifiers APPROVE + guard OK + verify pass).
+20. Before the proof, two independent execution-trace reviewers confirm the seven checks; the proof runs only if both sign off.
+21. A manual workflow proof on `sandbox-epic` reaches a commit-gate PASS (acceptance evidence).
+22. The proof run's run-report has `agent_output_source.*` = `workflow_core_runner`.
+23. The proof run's run-report has `safety.*` all false.
+24. The proof run's run-report has `final_branch_status.committed` false.
+25. No commit, push, PR, merge, status write-back, or journal write happens during the proof run.
