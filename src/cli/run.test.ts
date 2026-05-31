@@ -9,6 +9,7 @@ import type { ValidationReport } from "../validate/findings.js";
 import { ActiveTicketSchema } from "../guard/active-ticket.js";
 import { runGuardPaths, type GuardEnv } from "../guard/cli.js";
 import type { RunReportIo } from "../run-report/cli.js";
+import type { DecisionsLedgerIo } from "../orchestrator/decisions-ledger.js";
 import { runCli, type CliIo } from "./run.js";
 
 const cliTempDirs: string[] = [];
@@ -24,6 +25,35 @@ afterEach(() => {
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "validate", "__fixtures__");
 const fx = (name: string): string => path.join(fixturesDir, name);
+
+function memoryLedgerIo(initial: Record<string, string> = {}): {
+  ledgerIo: DecisionsLedgerIo;
+  state: Record<string, string>;
+  writes: { file: string; contents: string }[];
+} {
+  const state: Record<string, string> = { ...initial };
+  const writes: { file: string; contents: string }[] = [];
+  const norm = (file: string): string => file.replace(/\\/g, "/");
+  return {
+    state,
+    writes,
+    ledgerIo: {
+      readFileIfExists: (file) => {
+        const key = norm(file);
+        return Object.prototype.hasOwnProperty.call(state, key) ? (state[key] ?? null) : null;
+      },
+      writeFile: (file, contents) => {
+        const key = norm(file);
+        writes.push({ file: key, contents });
+        state[key] = contents;
+      },
+    },
+  };
+}
+
+/** Locate the decisions-ledger file for an epic path the same way the CLI does. */
+const ledgerKey = (epic: string): string =>
+  `${epic.replace(/[\\/]+$/, "")}/.forge/decisions-ledger.json`.replace(/\\/g, "/");
 
 function fakeIo(): {
   io: CliIo;
@@ -475,9 +505,12 @@ describe("runCli dispatch pm — deterministic input assembly", () => {
     expect(code).toBe(2);
   });
 
-  test("dispatch pm with only --assigned-decision-id emits the skeleton + authoritative section (exit 0, no assembled inputs)", () => {
+  test("dispatch pm with a cross-check --assigned-decision-id emits the skeleton + authoritative section (exit 0, no assembled inputs)", () => {
     const { io, out } = fakeIo();
-    const code = runCli(["dispatch", "pm", sandboxEpicPath, "--assigned-decision-id", "D-001"], io);
+    const { ledgerIo } = memoryLedgerIo(); // absent ledger → Core computes D-001
+    const code = runCli(["dispatch", "pm", sandboxEpicPath, "--assigned-decision-id", "D-001"], io, {
+      decisionsLedgerIo: ledgerIo,
+    });
     expect(code).toBe(0);
     const spec = JSON.parse(out.join("\n")) as { prompt: string };
     expect(spec.prompt).not.toContain("## Inputs (each validated");
@@ -485,17 +518,34 @@ describe("runCli dispatch pm — deterministic input assembly", () => {
     expect(spec.prompt).toContain("decision_id: D-001");
   });
 
-  test("dispatch pm without --assigned-decision-id fails with ASSIGNED_DECISION_ID_REQUIRED (exit 1)", () => {
+  test("dispatch pm without --assigned-decision-id uses Core's computed id from an absent ledger (D-001)", () => {
     const { io, out } = fakeIo();
-    const code = runCli(["dispatch", "pm", sandboxEpicPath], io);
-    expect(code).toBe(1);
-    expect(JSON.parse(out.join("\n")).code).toBe("ASSIGNED_DECISION_ID_REQUIRED");
+    const { ledgerIo } = memoryLedgerIo();
+    const code = runCli(["dispatch", "pm", sandboxEpicPath], io, { decisionsLedgerIo: ledgerIo });
+    expect(code).toBe(0);
+    const spec = JSON.parse(out.join("\n")) as { prompt: string };
+    expect(spec.prompt).toContain("## Assigned decision_id (authoritative");
+    expect(spec.prompt).toContain("decision_id: D-001");
   });
 
-  test("dispatch pm with assembled inputs renders the assigned decision_id in the prompt", () => {
+  test("dispatch pm with assembled inputs renders Core's computed decision_id in the prompt", () => {
     const f = pmInputDir();
     const { io, out } = fakeIo();
-    const code = runCli(pmArgs(sandboxEpicPath, f, "D-007"), io);
+    // Six prior entries → Core computes D-007; the cross-check flag agrees.
+    const existing = `${JSON.stringify(
+      {
+        decisions: ["D-001", "D-002", "D-003", "D-004", "D-005", "D-006"].map((id, i) => ({
+          decision_id: id,
+          ticket: `T${String(i + 1).padStart(2, "0")}`,
+          branch: `forge/x/${id}`,
+          ts: `2026-01-0${i + 1}T00:00:00.000Z`,
+        })),
+      },
+      null,
+      2,
+    )}\n`;
+    const { ledgerIo } = memoryLedgerIo({ [ledgerKey(sandboxEpicPath)]: existing });
+    const code = runCli(pmArgs(sandboxEpicPath, f, "D-007"), io, { decisionsLedgerIo: ledgerIo });
     expect(code).toBe(0);
     const spec = JSON.parse(out.join("\n")) as { prompt: string };
     expect(spec.prompt).toContain("## Assigned decision_id (authoritative");
@@ -505,7 +555,8 @@ describe("runCli dispatch pm — deterministic input assembly", () => {
   test("dispatch pm with a malformed --assigned-decision-id is rejected (ASSIGNED_DECISION_ID_REQUIRED)", () => {
     const f = pmInputDir();
     const { io, out } = fakeIo();
-    const code = runCli(pmArgs(sandboxEpicPath, f, "X-1"), io);
+    const { ledgerIo } = memoryLedgerIo();
+    const code = runCli(pmArgs(sandboxEpicPath, f, "X-1"), io, { decisionsLedgerIo: ledgerIo });
     expect(code).toBe(1);
     expect(JSON.parse(out.join("\n")).code).toBe("ASSIGNED_DECISION_ID_REQUIRED");
   });
@@ -517,6 +568,128 @@ describe("runCli dispatch pm — deterministic input assembly", () => {
       io,
     );
     expect(code).toBe(2);
+  });
+});
+
+describe("runCli dispatch pm — Core-owned decision_id assignment from the ledger", () => {
+  const ledgerWith = (ids: string[]): string =>
+    `${JSON.stringify(
+      {
+        decisions: ids.map((id, i) => ({
+          decision_id: id,
+          ticket: `T${String(i + 1).padStart(2, "0")}`,
+          branch: `forge/x/${id}`,
+          ts: `2026-01-0${i + 1}T00:00:00.000Z`,
+        })),
+      },
+      null,
+      2,
+    )}\n`;
+
+  test("absent ledger → Core assigns D-001 (no flag)", () => {
+    const { io, out } = fakeIo();
+    const { ledgerIo } = memoryLedgerIo();
+    const code = runCli(["dispatch", "pm", sandboxEpicPath], io, { decisionsLedgerIo: ledgerIo });
+    expect(code).toBe(0);
+    expect(JSON.parse(out.join("\n")).prompt).toContain("decision_id: D-001");
+  });
+
+  test("existing ledger → Core assigns nextDecisionId(existing) (no flag)", () => {
+    const { io, out } = fakeIo();
+    const { ledgerIo } = memoryLedgerIo({ [ledgerKey(sandboxEpicPath)]: ledgerWith(["D-001", "D-002"]) });
+    const code = runCli(["dispatch", "pm", sandboxEpicPath], io, { decisionsLedgerIo: ledgerIo });
+    expect(code).toBe(0);
+    expect(JSON.parse(out.join("\n")).prompt).toContain("decision_id: D-003");
+  });
+
+  test("--assigned-decision-id equal to Core's computed id → dispatch succeeds", () => {
+    const { io, out } = fakeIo();
+    const { ledgerIo } = memoryLedgerIo({ [ledgerKey(sandboxEpicPath)]: ledgerWith(["D-001"]) });
+    const code = runCli(
+      ["dispatch", "pm", sandboxEpicPath, "--assigned-decision-id", "D-002"],
+      io,
+      { decisionsLedgerIo: ledgerIo },
+    );
+    expect(code).toBe(0);
+    expect(JSON.parse(out.join("\n")).prompt).toContain("decision_id: D-002");
+  });
+
+  test("--assigned-decision-id disagreeing with Core's computed id → DECISION_ID_PROVENANCE_MISMATCH, no PM prompt (exit 1)", () => {
+    const { io, out } = fakeIo();
+    const { ledgerIo } = memoryLedgerIo({ [ledgerKey(sandboxEpicPath)]: ledgerWith(["D-001"]) });
+    const code = runCli(
+      ["dispatch", "pm", sandboxEpicPath, "--assigned-decision-id", "D-009"],
+      io,
+      { decisionsLedgerIo: ledgerIo },
+    );
+    expect(code).toBe(1);
+    const parsed = JSON.parse(out.join("\n")) as { ok: boolean; code: string; prompt?: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.code).toBe("DECISION_ID_PROVENANCE_MISMATCH");
+    expect(parsed.prompt).toBeUndefined(); // no prompt rendered
+  });
+
+  test("malformed ledger → LEDGER_INVALID, fail-closed, no PM prompt (exit 1)", () => {
+    const { io, out } = fakeIo();
+    const { ledgerIo } = memoryLedgerIo({ [ledgerKey(sandboxEpicPath)]: "{ not json" });
+    const code = runCli(["dispatch", "pm", sandboxEpicPath], io, { decisionsLedgerIo: ledgerIo });
+    expect(code).toBe(1);
+    const parsed = JSON.parse(out.join("\n")) as { ok: boolean; code: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.code).toBe("LEDGER_INVALID");
+  });
+
+  test("the dispatch-pm read never writes the ledger", () => {
+    const { io } = fakeIo();
+    const { ledgerIo, writes } = memoryLedgerIo({ [ledgerKey(sandboxEpicPath)]: ledgerWith(["D-001"]) });
+    runCli(["dispatch", "pm", sandboxEpicPath], io, { decisionsLedgerIo: ledgerIo });
+    expect(writes).toHaveLength(0);
+  });
+
+  test("assembled-inputs dispatch with no flag uses Core's computed id from the ledger", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-pm-assign-"));
+    cliTempDirs.push(dir);
+    const engineer = path.join(dir, "e.yaml");
+    const semantic = path.join(dir, "s.yaml");
+    const scope = path.join(dir, "sc.yaml");
+    const facts = path.join(dir, "f.json");
+    fs.writeFileSync(
+      engineer,
+      "ticket: T01\nsummary: add helper\nfiles_changed: [{ path: src/sandbox/add.ts, adds: 3, dels: 0 }]\ntests: { added: 2, changed: 0 }\ncommands_run: [{ cmd: pnpm test, result: pass }]\nwithin_allowed_paths: true\n",
+    );
+    fs.writeFileSync(
+      semantic,
+      'verdict: APPROVE\nacceptance_checked: [{ id: 1, status: met, evidence: "add.ts:1" }]\nfindings: []\nrisk_level: low\n',
+    );
+    fs.writeFileSync(
+      scope,
+      "verdict: APPROVE\nchanged_files: [src/sandbox/add.ts]\nallowed_path_status: clean\nforbidden_path_violations: []\nunexpected_files: []\nrecommendation: in scope\n",
+    );
+    fs.writeFileSync(
+      facts,
+      JSON.stringify({
+        parse_validation: { engineer: true, semantic_verifier: true, scope_verifier: true, pm: true },
+        verify_command_results: [{ cmd: "pnpm test", result: "pass" }],
+        final_changed_files: ["src/sandbox/add.ts"],
+        final_branch_status: { branch: "forge/sandbox-epic/T01-add", ahead_of_base: 0, committed: false },
+      }),
+    );
+
+    const { io, out } = fakeIo();
+    const { ledgerIo } = memoryLedgerIo({ [ledgerKey(sandboxEpicPath)]: ledgerWith(["D-001", "D-002"]) });
+    const code = runCli(
+      [
+        "dispatch", "pm", sandboxEpicPath,
+        "--engineer-output", engineer,
+        "--semantic-output", semantic,
+        "--scope-output", scope,
+        "--facts", facts,
+      ],
+      io,
+      { decisionsLedgerIo: ledgerIo },
+    );
+    expect(code).toBe(0);
+    expect(JSON.parse(out.join("\n")).prompt).toContain("decision_id: D-003");
   });
 });
 
@@ -917,6 +1090,54 @@ describe("runCli run-report write routing", () => {
     const parsed = JSON.parse(writes[0]?.contents ?? "") as { schema: string; result: string };
     expect(parsed.schema).toBe("forge-run-report/v1");
     expect(parsed.result).toBe("PASS");
+  });
+});
+
+describe("runCli ledger append routing", () => {
+  test("USAGE advertises the ledger append subcommand", () => {
+    const { io, err } = fakeIo();
+    runCli(["frobnicate"], io); // any unknown command surfaces USAGE
+    expect(err.join("\n")).toContain("ledger append");
+  });
+
+  test("routes ledger append through the injected DecisionsLedgerIo seam and writes once", () => {
+    const epic = "/epic/example";
+    const { ledgerIo, writes } = memoryLedgerIo();
+    const { io, out } = fakeIo();
+    const code = runCli(
+      ["ledger", "append", epic, "--decision-id", "D-001", "--ticket", "T01", "--branch", "forge/x/T01"],
+      io,
+      { decisionsLedgerIo: ledgerIo },
+    );
+    expect(code).toBe(0);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.file).toBe(ledgerKey(epic));
+    expect(JSON.parse(out.join("\n")).ok).toBe(true);
+  });
+
+  test("routes a sequence violation to exit 1 with no write", () => {
+    const epic = "/epic/example";
+    const existing = `${JSON.stringify(
+      { decisions: [{ decision_id: "D-001", ticket: "T01", branch: "b", ts: "2026-01-01T00:00:00.000Z" }] },
+      null,
+      2,
+    )}\n`;
+    const { ledgerIo, writes } = memoryLedgerIo({ [ledgerKey(epic)]: existing });
+    const { io, out } = fakeIo();
+    const code = runCli(
+      ["ledger", "append", epic, "--decision-id", "D-001", "--ticket", "T02", "--branch", "b"],
+      io,
+      { decisionsLedgerIo: ledgerIo },
+    );
+    expect(code).toBe(1);
+    expect(writes).toHaveLength(0);
+    expect(JSON.parse(out.join("\n")).code).toBe("LEDGER_SEQUENCE_INVALID");
+  });
+
+  test("`ledger` with no subcommand exits 2 with usage", () => {
+    const { io, err } = fakeIo();
+    expect(runCli(["ledger"], io)).toBe(2);
+    expect(err.join("\n")).toMatch(/usage/i);
   });
 });
 
