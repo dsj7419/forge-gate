@@ -1,0 +1,10 @@
+schema_version: 1
+sprint: sprint-01-capture-protocol
+integration_base: main
+gate_policy:
+  default_push: human
+  default_merge: human
+tickets:
+  - id: T01
+    kind: green
+    status: pending
