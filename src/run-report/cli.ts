@@ -28,7 +28,28 @@ const USAGE =
   "         [--pm-output <path>] [--facts <path>] [--active-ticket <path>]\n" +
   "         [--out <path>]\n" +
   "         [--proposed-status-transition <s>] [--suggested-commit-message <s>]\n" +
-  "         [--suggested-command <s>] [--note <s>]";
+  "         [--suggested-command <s>] [--note <s>]\n" +
+  "         [--agent-output-source-engineer <yaml_text|structured_json|workflow_core_runner>]\n" +
+  "         [--agent-output-source-semantic-verifier <yaml_text|structured_json|workflow_core_runner>]\n" +
+  "         [--agent-output-source-scope-verifier <yaml_text|structured_json|workflow_core_runner>]\n" +
+  "         [--agent-output-source-pm <yaml_text|structured_json|workflow_core_runner>]";
+
+/** The trust-path label values accepted on the per-role agent-output-source flags. */
+const AGENT_OUTPUT_SOURCE_VALUES = [
+  "yaml_text",
+  "structured_json",
+  "workflow_core_runner",
+] as const;
+
+type AgentOutputSourceValue = (typeof AGENT_OUTPUT_SOURCE_VALUES)[number];
+
+/** Maps each per-role flag to the metadata role key it populates. */
+const AGENT_OUTPUT_SOURCE_FLAGS = {
+  "--agent-output-source-engineer": "engineer",
+  "--agent-output-source-semantic-verifier": "semantic_verifier",
+  "--agent-output-source-scope-verifier": "scope_verifier",
+  "--agent-output-source-pm": "pm",
+} as const;
 
 /**
  * Filesystem seam for `forge run-report write`. The orchestrator/test layer
@@ -79,6 +100,10 @@ const KNOWN_FLAGS = new Set([
   "--suggested-commit-message",
   "--suggested-command",
   "--note",
+  "--agent-output-source-engineer",
+  "--agent-output-source-semantic-verifier",
+  "--agent-output-source-scope-verifier",
+  "--agent-output-source-pm",
 ]);
 
 type FailureCode =
@@ -165,6 +190,15 @@ export function runWriteRunReport(args: string[], cli: CliIo, io: RunReportIo): 
       cli,
       `--gate-human-required must be true or false; got ${JSON.stringify(gateHumanRequiredRaw)}`,
     );
+  }
+
+  // Per-role agent-output-source flags are optional. Each, when supplied, must
+  // be a valid enum value; an invalid value is a usage error (exit 2), never a
+  // silent coerce/drop. The metadata is undefined when no flag is supplied so
+  // the report omits the field (backward-compatible write).
+  const agentOutputSource = collectAgentOutputSource(rest);
+  if (!agentOutputSource.ok) {
+    return usage(cli, agentOutputSource.detail);
   }
 
   const forgeDir = joinForge(epicPath);
@@ -283,6 +317,9 @@ export function runWriteRunReport(args: string[], cli: CliIo, io: RunReportIo): 
     checkpoint: { base: checkpointBase, head: checkpointHead },
     guard: { result: guardResult, exit: guardExit },
     ...(commitGate !== undefined ? { commit_gate_materials: commitGate } : {}),
+    ...(agentOutputSource.value !== undefined
+      ? { agent_output_source: agentOutputSource.value }
+      : {}),
     ...(notes !== undefined ? { notes } : {}),
   };
 
@@ -366,6 +403,40 @@ function collectCommitGateMaterials(
     suggested_commit_message: message,
     suggested_commands: commands,
   };
+}
+
+type AgentOutputSourceMetadata = NonNullable<RuntimeMetadata["agent_output_source"]>;
+
+/**
+ * Build the optional `agent_output_source` metadata from whichever per-role
+ * flags are present. Returns `{ ok: true, value: undefined }` when no flag is
+ * supplied (the report omits the field). An invalid enum value on any flag is a
+ * usage error (`{ ok: false, detail }`), never a coerce or silent drop.
+ */
+function collectAgentOutputSource(
+  args: string[],
+):
+  | { ok: true; value: AgentOutputSourceMetadata | undefined }
+  | { ok: false; detail: string } {
+  const metadata: AgentOutputSourceMetadata = {};
+  let any = false;
+  for (const [flag, role] of Object.entries(AGENT_OUTPUT_SOURCE_FLAGS)) {
+    const raw = flagValue(args, flag);
+    if (raw === undefined) continue;
+    if (!isAgentOutputSourceValue(raw)) {
+      return {
+        ok: false,
+        detail: `${flag} must be one of ${AGENT_OUTPUT_SOURCE_VALUES.join("|")}; got ${JSON.stringify(raw)}`,
+      };
+    }
+    metadata[role] = raw;
+    any = true;
+  }
+  return { ok: true, value: any ? metadata : undefined };
+}
+
+function isAgentOutputSourceValue(value: string): value is AgentOutputSourceValue {
+  return (AGENT_OUTPUT_SOURCE_VALUES as readonly string[]).includes(value);
 }
 
 function describeIssues(error: { issues: { path: (string | number)[]; message: string }[] }): string[] {

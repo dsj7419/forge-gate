@@ -552,6 +552,70 @@ describe("forge run-report write — gate flags are optional cross-checks", () =
   });
 });
 
+describe("forge run-report write — agent_output_source flags", () => {
+  test("writes agent_output_source when per-role flags are explicitly provided", () => {
+    const { cli, reportIo, state } = makeIo();
+    const args = [
+      ...baseArgs,
+      "--agent-output-source-engineer",
+      "yaml_text",
+      "--agent-output-source-semantic-verifier",
+      "yaml_text",
+      "--agent-output-source-scope-verifier",
+      "structured_json",
+      "--agent-output-source-pm",
+      "yaml_text",
+    ];
+    const code = runWriteRunReport(args, cli, reportIo);
+
+    expect(code).toBe(0);
+    const parsed = JSON.parse(state[defaultPaths.outDefault] ?? "") as {
+      agent_output_source?: {
+        engineer?: string;
+        semantic_verifier?: string;
+        scope_verifier?: string;
+        pm?: string;
+      };
+    };
+    expect(parsed.agent_output_source).toEqual({
+      engineer: "yaml_text",
+      semantic_verifier: "yaml_text",
+      scope_verifier: "structured_json",
+      pm: "yaml_text",
+    });
+  });
+
+  test("writes a partial agent_output_source when only some role flags are provided", () => {
+    const { cli, reportIo, state } = makeIo();
+    const args = [...baseArgs, "--agent-output-source-pm", "structured_json"];
+    const code = runWriteRunReport(args, cli, reportIo);
+
+    expect(code).toBe(0);
+    const parsed = JSON.parse(state[defaultPaths.outDefault] ?? "") as {
+      agent_output_source?: Record<string, string>;
+    };
+    expect(parsed.agent_output_source).toEqual({ pm: "structured_json" });
+  });
+
+  test("omits agent_output_source when no per-role flag is provided (backward-compatible)", () => {
+    const { cli, reportIo, state } = makeIo();
+    const code = runWriteRunReport(baseArgs, cli, reportIo);
+
+    expect(code).toBe(0);
+    const parsed = JSON.parse(state[defaultPaths.outDefault] ?? "") as Record<string, unknown>;
+    expect(parsed).not.toHaveProperty("agent_output_source");
+  });
+
+  test("an invalid enum value on a per-role flag surfaces a usage error (exit 2)", () => {
+    const { cli, reportIo, err, writes } = makeIo();
+    const args = [...baseArgs, "--agent-output-source-engineer", "made_up"];
+    const code = runWriteRunReport(args, cli, reportIo);
+    expect(code).toBe(2);
+    expect(err.join("\n")).toMatch(/agent-output-source-engineer|yaml_text|structured_json/i);
+    expect(writes).toEqual([]);
+  });
+});
+
 describe("forge run-report write — commit-gate materials", () => {
   test("flags propagate into commit_gate_materials", () => {
     const { cli, reportIo, state } = makeIo();

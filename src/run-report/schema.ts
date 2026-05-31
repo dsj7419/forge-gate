@@ -87,6 +87,37 @@ const AgentOutputsSchema = z
   })
   .strict();
 
+/**
+ * The trust-path label recording which evidence path produced each agent's
+ * output. It deliberately collapses "format" and "capture authority" into one
+ * value:
+ * - `yaml_text` — captured and validated from the YAML/text path.
+ * - `structured_json` — captured as a structured JSON/object output, then
+ *   validated by Core.
+ * - `workflow_core_runner` — RESERVED for future workflow/core-runner
+ *   deterministic capture. Accepted by the schema so a Phase 2 emitter does not
+ *   re-open the frozen schema, but nothing in 1c emits it.
+ */
+const AgentOutputSourceValue = z.enum([
+  "yaml_text",
+  "structured_json",
+  "workflow_core_runner",
+]);
+
+/**
+ * Optional, per-role provenance object. Each role is individually optional and
+ * the object is `.strict()` so unknown role keys are rejected while any subset
+ * of the four known roles is accepted.
+ */
+const AgentOutputSourceSchema = z
+  .object({
+    engineer: AgentOutputSourceValue.optional(),
+    semantic_verifier: AgentOutputSourceValue.optional(),
+    scope_verifier: AgentOutputSourceValue.optional(),
+    pm: AgentOutputSourceValue.optional(),
+  })
+  .strict();
+
 const CommitGateMaterialsSchema = z
   .object({
     proposed_status_transition: NonEmptyStringSchema,
@@ -135,6 +166,7 @@ export const RunReportSchema = z
     final_branch_status: FinalBranchStatusSchema,
     agent_outputs: AgentOutputsSchema,
     commit_gate_materials: CommitGateMaterialsSchema.optional(),
+    agent_output_source: AgentOutputSourceSchema.optional(),
     notes: z.array(NonEmptyStringSchema).optional(),
     safety: SafetySchema,
   })
