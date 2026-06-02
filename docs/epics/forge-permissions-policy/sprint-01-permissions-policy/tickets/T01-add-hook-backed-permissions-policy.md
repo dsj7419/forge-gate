@@ -46,11 +46,13 @@ forbidden_paths:
 
 ## Scope
 
-Replace the broad static `permissions.deny` block with a **PreToolUse hook** that judges command *intent*, so a
-maintainer can use the ordinary, reversible GitHub PR workflow through the agent while irreversible and
-destructive operations are refused and a merge is gated on explicit human approval. The workflow-backed runner
-must stay outward-action-free at every layer. This is the principled direction from
-`docs/permissions-policy-discovery.md` (landed PR #25).
+Replace the broad static `permissions.deny` block with a **PreToolUse hook** that judges command *intent* by the
+**four-class model** (see "Required policy behavior"), so a maintainer can use the ordinary GitHub workflow
+through the agent — **safe read-only/local Git and explicit-path staging and the reversible PR workflow are
+permitted**, while destructive/outward-risk operations are refused and a merge stays human-only. The
+workflow-backed runner must stay outward-action-free at every layer. Direction: `docs/permissions-policy-discovery.md`
+(PR #25), amended by `docs/permissions-policy-amendment-discovery.md` (PR #27) after the first shape proved
+operationally unusable.
 
 This ticket changes only the **substrate permission layer** (the hook + the project settings that registers it),
 the narrow `.gitignore` exception that lets the hook be tracked, and the `forge-core-runner` charter (so the
@@ -67,45 +69,52 @@ is a re-scope, not a workaround.
   STOP and surface it — do not widen scope silently.
 - Auto-merge, or any relaxation of the human-gate thesis. A merge is still a human-approved action.
 
-## Required policy behavior
+## Required policy behavior — four-class model (amended)
 
-The active policy (hook plus the settings that register it) must, **for an interactive maintainer session**:
+> **Amendment (2026-06-01):** the first implementation used "permit only the PR allow-shape, refuse every other
+> git/gh mention." It was adversarially secure but **operationally unusable** — on activation it blocked safe
+> read-only/local Git (`git status`, `git diff`, `git log`, `git add`, `git fetch`, `git switch`), making the repo
+> unusable (see `docs/permissions-policy-amendment-discovery.md`, PR #27). The policy is re-scoped to **four
+> command classes**. The proven deny engine (mention-scan + complete de-obfuscation + dynamic-program-token /
+> command-substitution / grouping deny + runner L3) is **re-used**; this amendment **adds a safe-Git allowlist**
+> (Classes 1–2) so daily Git works.
 
-**Permit (reversible PR workflow, as part of an approved PR-safe flow):**
-- `git push -u origin <feature-branch>` (a non-default branch only)
-- `gh pr create`
-- `gh pr view`
-- `gh pr checks`
+**Architectural rule (non-negotiable): do NOT refuse every git/gh mention.** Decide by shape:
+- a **simple/static** command matching a **known-safe shape** (Class 1/2/3) → **ALLOW**;
+- a **simple/static** command that is **not** a known-safe shape (an unknown or destructive git/gh form) → **DENY**;
+- a **complex/dynamic/obfuscated** command that involves or could hide git/gh → **DENY** (the proven deny engine);
+- a **non-git/gh** command → **PASS-THROUGH** (defer to normal flow).
 
-**Refuse (always):**
-- `git push --force` (and `--force-with-lease` history rewrites)
-- `git reset --hard`
-- a direct push to the default branch (`main`)
-- unsafe branch deletion (force branch deletion of an unmerged branch)
-- `powershell` / `pwsh` invocations and any shell-bypass pattern that routes a refused command through another
-  shell
+**Class 1 — Safe local / read-only Git → PERMIT** (simple/static exact shapes): `git status`, `git diff`,
+`git log`, `git show`, `git rev-parse`, `git branch` (list only), `git fetch`, `git pull --ff-only`,
+`git switch <branch>`, `git checkout <branch>`. **Challenge destructive/unknown flags per command and DENY them**
+(e.g. `git checkout -- <path>` / `git checkout .`, `-f`/`--force`/`--detach`/`--discard-changes`, `git clean`,
+`git pull` without `--ff-only`).
 
-**Approval-gated (refuse unless an explicit, matching, unexpired sentinel is present):**
-- `gh pr merge <N>` — permitted only when the human-created approval sentinel (below) exists for that exact PR
-  number and merge action and is still valid. Absent or non-matching, the hook refuses.
+**Class 2 — Safe staging → PERMIT (explicit paths only):** `git add <explicit-path>`. **DENY** broad staging:
+`git add .`, `git add -A`, `git add --all`, `git add :/`, `git add *`, broad pathspecs. The hook is **not** the
+path authority — Core `guard paths` / the scope verifier own path-fence compliance; the hook only permits
+explicit-path staging.
 
-The design seam is **reversibility**: a feature-branch push or an opened PR is reversible/reviewable; a merge,
-a force-push, or a hard-reset is not. Gate on that property, not on "is it git or gh".
+**Class 3 — Safe PR workflow → PERMIT:** `git push -u|--set-upstream origin <feature-branch>` (non-default
+branch only), `gh pr create`, `gh pr view`, `gh pr checks`.
 
-### Required merge-approval mechanism (ratified)
+**Class 4 — Destructive / approval-gated / unsafe → DENY:** force push (`--force`/`--force-with-lease`), direct
+push to `main`/`master`, `git reset --hard`, branch deletion (`git branch -D`/`-M`), destructive `switch`/
+`checkout` flags (`-c`/`-C`/`-b`/`-B`/`--detach`/`--force`/`--discard-changes`/`checkout -- <path>`),
+**`git restore` and `git checkout -- <path>` (human-only this ticket)**, `git clean`, `git merge`, `git rebase`,
+non-ff `git pull` (bare / `--rebase` / `--no-ff`), `gh pr merge` (human-only this ticket), `gh api` mutation,
+`powershell`/`pwsh` and shell-bypass, dynamic program tokens, shell chaining/substitution/grouping around git/gh,
+and any **unknown git/gh shape**.
 
-A merge is gated on an explicit, short-lived **sentinel file** the human creates — never a vague session marker
-and never a permanent grant. The hook permits `gh pr merge <N>` **only** when a sentinel under
-`.forge/approval/` exists, matches the target PR number, names the exact merge action, and has not expired or
-been consumed.
+The design seam is the **command class** (read-only/local/staging/PR = safe; destructive/outward = refused), not
+"is it git or gh". `git status` is as safe as `pnpm test`; `git push --force` is not.
 
-- Location/name: `.forge/approval/merge-pr-<N>-approved.json` (for example `.forge/approval/merge-pr-25-approved.json`).
-- Required fields: `pr_number`, `approved_action` (the exact action, e.g. `pr_merge`), `created_at`, and either
-  `expires_at` **or** `single_use: true`.
-- The hook **reads** the sentinel (it never creates one); the human creates it to authorize one specific merge.
-- The hook refuses the merge if the sentinel is absent, names a different PR number or action, is expired, or
-  (when `single_use`) has already been consumed. `.forge/approval/` is gitignored runtime state (under `.forge/`),
-  created out-of-band by the human — it is **not** an artifact this ticket writes.
+### `gh pr merge` is human-only for this ticket (sentinel deferred)
+
+`gh pr merge` simply **denies** in this ticket — a maintainer performs the merge via `!`. The previously-specified
+sentinel-gated merge (`.forge/approval/merge-pr-<N>-approved.json`) is a **DEFERRED FOLLOW_UP**, to be designed
+in its own ticket after this four-class slice ships and soaks. **Do not implement sentinel logic now.**
 
 ## Required runner-safety preservation (three layers, none weakened)
 
@@ -116,10 +125,13 @@ The runner's no-outward-action guarantee must hold at all three layers after thi
 - **L2** — the `forge-core-runner` charter forbids outward actions and grants only the Forge CLI, read-only git,
   the ticket's verify command, and `.forge/**` writes. **Harden it** so the runner's discipline is explicit and
   self-standing — it must not depend on a broad project-level deny to be safe.
-- **L3** — the hook/settings policy refuses outward actions for the runner's agents. Because L3 is no longer a
-  blanket deny, the hook must still refuse a runner-originated outward action (or the charter L2 + the workflow
-  L1 must be demonstrably sufficient on their own). State explicitly in the implementation which layer refuses a
-  runner push and why that is sound.
+- **L3** — the hook refuses outward/mutating actions for the runner's agents. A **forge runner/role agent**
+  (`forge-core-runner` or any `forge-*` role) may use **read-only Git only if needed** for evidence gathering —
+  `git status`, `git diff`, `git log`, `git show`, `git rev-parse` — and is **DENIED ALL** staging, push, PR,
+  merge, restore, `checkout`-write, `reset`, branch mutation, and `gh` (`git add`, `git push`, `git merge`,
+  `git rebase`, `git reset`, `git restore`, `git checkout -- <path>`, `git branch -D`, `gh pr create`,
+  `gh pr merge`, `gh api` mutation) — by every spelling. State explicitly in the implementation which layer
+  refuses a runner-originated outward/mutating action and why that is sound.
 
 ## Required hook design decisions (answer before/within implementation)
 
@@ -128,16 +140,20 @@ These were posed in the discovery; the implementation must resolve each and reco
 1. **Where the hook lives and how Claude Code discovers it** — register a PreToolUse hook in
    `.claude/settings.json` pointing at a self-contained script under `.claude/hooks/`. The script must run with
    no package/build dependency (a plain Node `.mjs` or POSIX-safe script).
-2. **Command discrimination** — the hook must reliably tell apart: a feature-branch push vs a direct push to
-   `main` vs a force-push; a normal `gh pr create/view/checks` vs `gh pr merge`; and a shell-bypass attempt.
-   Document the matching approach and its limits.
-3. **Encoding explicit human approval for a merge** — define the concrete signal the hook reads to treat a merge
-   as approved, and confirm an unapproved merge is refused.
+2. **Command-class discrimination** — the hook must reliably classify a command into the four classes: tell apart
+   safe read-only/local Git (Class 1) and explicit-path staging (Class 2) and feature-branch push / `gh pr
+   create|view|checks` (Class 3) from destructive/outward forms (Class 4: force-push, push-to-`main`,
+   `reset --hard`, branch deletion, merge/rebase, `gh pr merge`, destructive flags), and refuse complex/dynamic/
+   obfuscated forms. Document the matching approach and its limits. **Reuse the proven deny engine**; add the
+   Class-1/2 safe-Git allowlist.
+3. **`gh pr merge` is human-only** this ticket (simple deny); the sentinel-gated merge is a deferred follow-up.
 4. **Fail-closed on error** — if the hook errors or cannot decide, it must **refuse** (default-deny), never
    default-allow.
 5. **Testing without executing destructive operations** — prove the policy with a self-contained hook self-check
-   that feeds representative tool-call inputs and asserts permit/refuse/approval-gated outcomes. No real
-   force-push, hard-reset, branch deletion, or default-branch push is ever executed.
+   that feeds representative tool-call inputs and asserts the Class-1/2/3 ALLOW, Class-4 DENY, pass-through, and
+   fail-closed outcomes. No real force-push, hard-reset, branch deletion, or default-branch push is ever executed.
+   **Plus the real-repo activation smoke test (AC 15): after the hook is live, `git status`/`diff`/`log` must
+   still work** — run it in an isolated copy/worktree so a failure cannot lock the live session.
 6. **Strict static floor stays** — even with the hook in place, keep a minimal static `permissions.deny` floor
    for the truly-irreversible operations (`git push --force`, `git reset --hard`, the bypass shells) so a hook
    failure cannot expose them. The hook adds nuance on top of a small, always-on static floor.
@@ -168,34 +184,60 @@ untracked. `.claude/settings.local.json` must remain untracked and is in `forbid
 
 1. A PreToolUse hook is registered in `.claude/settings.json` and points at a self-contained script under
    `.claude/hooks/` that runs with no package/build dependency.
-2. The hook **permits**: `git push -u origin <feature-branch>`, `gh pr create`, `gh pr view`, `gh pr checks`.
-3. The hook **refuses**: `git push --force`, `git reset --hard`, a direct push to `main`, force branch deletion
-   of an unmerged branch, and `powershell`/`pwsh` / shell-bypass patterns.
-4. The hook treats `gh pr merge <N>` as **approval-gated** by the sentinel mechanism — refused unless a matching,
-   valid `.forge/approval/merge-pr-<N>-approved.json` (right PR number + `approved_action` + unexpired/unconsumed)
-   exists; a missing, mismatched, expired, or consumed sentinel is refused.
-5. The hook **fails closed**: on any error or undecidable input it refuses.
-6. A minimal static `permissions.deny` floor remains for the irreversible operations (`git push --force`,
-   `git reset --hard`, bypass shells), independent of the hook.
-7. `.gitignore` tracks **only** the intended `.claude/hooks` exception; nothing else under `.claude/` becomes
-   tracked; `.claude/settings.local.json` stays untracked.
-8. The runner workflow (`workflows/forge-run-ticket.workflow.js`) is unchanged and still has no outward-action
-   stage (L1); the `forge-core-runner` charter is hardened so the runner's no-outward-action discipline is
-   self-standing (L2); the implementation states which layer refuses a runner-originated outward action.
-9. `src/**`, `commands/**`, the four `forge-*` role charters, `package.json`, `pnpm-lock.yaml`, `tsconfig.json`,
-   `vitest.config.ts`, `README.md`, `.github/**`, and `docs/**` are untouched.
-10. A self-contained hook self-check demonstrates the permit / refuse / approval-gated outcomes for
-    representative inputs, executing no real destructive or default-branch operation.
-11. `pnpm test` passes (535/37 unaffected).
-12. `pnpm typecheck` passes.
+2. **Class 1 — operational read-only/local Git is ALLOWED:** `git status`, `git diff`, `git log`, `git show`,
+   `git rev-parse`, `git branch` (list), `git fetch`, `git pull --ff-only`, `git switch <branch>`,
+   `git checkout <branch>` all permitted; their destructive/unknown flags denied.
+3. **Class 2 — staging:** `git add <explicit-path>` is ALLOWED; `git add .`, `git add -A`, `git add --all`,
+   `git add :/`, `git add *` are DENIED.
+4. **Class 3 — PR workflow is ALLOWED:** `git push -u|--set-upstream origin <feature-branch>`, `gh pr create`,
+   `gh pr view`, `gh pr checks`.
+5. **Class 4 — destructive/unsafe is DENIED:** force push, direct push to `main`/`master`, `git reset --hard`,
+   branch deletion (`git branch -D`), destructive `switch`/`checkout` flags and `git checkout -- <path>`,
+   `git restore`, `git clean`, `git merge`, `git rebase`, non-ff `git pull`, `gh pr merge`, `gh api` mutation,
+   `powershell`/`pwsh` and shell-bypass, dynamic program tokens, shell chaining/substitution/grouping around
+   git/gh, and any unknown git/gh shape — all refused (the proven deny-engine regression set is preserved).
+6. The hook **fails closed**: on any error or undecidable input it refuses.
+7. A minimal static `permissions.deny` floor remains for the irreversible operations (`git push --force`,
+   `--force-with-lease`, `git reset --hard`, `powershell`, `pwsh`), independent of the hook.
+8. **Non-git/gh commands PASS THROUGH** (defer to normal flow): `pnpm test`, `pnpm test && pnpm build`, `ls`,
+   `node`, etc. are unaffected by the hook.
+9. **Runner L3:** a forge runner/role agent is ALLOWED read-only Git (`git status`/`diff`/`log`/`show`/
+   `rev-parse`) and is DENIED all staging/push/PR/merge/restore/`checkout`-write/`reset`/branch-mutation/`gh`
+   by every spelling.
+10. `.gitignore` tracks **only** the intended `.claude/hooks` exception; nothing else under `.claude/` becomes
+    tracked; `.claude/settings.local.json` stays untracked.
+11. The runner workflow is unchanged and still has no outward-action stage (L1); the `forge-core-runner` charter
+    is hardened so the runner's no-outward-action discipline is self-standing (L2).
+12. `src/**`, `commands/**`, the four `forge-*` role charters, `package.json`, `pnpm-lock.yaml`, `tsconfig.json`,
+    `vitest.config.ts`, `README.md`, `.github/**`, and `docs/**` are untouched.
+13. A self-contained hook self-check demonstrates the Class-1/2/3 **ALLOW**, the Class-4 **DENY**, the
+    pass-through, the runner L3, and fail-closed outcomes for representative inputs — executing no real
+    destructive or default-branch operation.
+14. `pnpm test` passes (535/37 unaffected). `pnpm typecheck` passes.
+15. **Real-repo activation smoke test (load-bearing, BEFORE the commit gate).** After the artifacts are copied
+    into the real repo and the hook is live, the orchestrator confirms the hook self-check passes AND **basic
+    local Git still works**: `git status`, `git diff`, and `git log --oneline -3` all SUCCEED (are not refused).
+    **If activation refuses normal local Git, the ticket FAILS** (this is the exact failure that opened the
+    amendment). Run it in an isolated copy/worktree so a failure does not lock the live session.
+16. **The artifact must not break a representative daily Git session** — the load-bearing operational guarantee
+    of this ticket.
 
-## Resolved decisions (ratified by the PM)
+## Resolved decisions (ratified by the PM — amended 2026-06-01)
 
-1. **Layered model, not hook-only.** A minimal always-on static deny floor for the irreversible/destructive
-   operations **plus** the PreToolUse hook for nuance (AC 6). The policy never relies on the hook alone.
-2. **Feature-branch push only inside an approved PR-safe flow** — `git push -u origin <feature-branch>` is
-   permitted; direct push to the default branch, force-push, unsafe branch deletion, and hard-reset stay refused.
-3. **Merge approval is a short-lived sentinel file** under `.forge/approval/` (see "Required merge-approval
-   mechanism" above): the hook permits `gh pr merge <N>` only for a matching, unexpired/unconsumed sentinel.
-   No vague session marker; no permanent grant.
-4. **`blast_radius: app`** — `repo` is not a schema enum value; `app` is the repo-wide-tooling tier.
+1. **Four-class model, not deny-all-mentions.** Safe local/read-only Git (Class 1) and explicit-path staging
+   (Class 2) are PERMITTED alongside the PR workflow (Class 3); only destructive/approval-gated/unsafe (Class 4)
+   is denied. The proven deny engine (mention-scan + de-obfuscation + dynamic-token/grouping deny + runner L3) is
+   re-used; this amendment adds the Class-1/2 safe-Git allowlist. Layered: a minimal static deny floor remains.
+2. **`git add`:** explicit-path staging only (`git add <path>`); `git add .`/`-A`/`--all`/`:/`/`*` denied. The
+   hook is not the path authority (Core guard/scope verifier own that).
+3. **`git restore` / `git checkout -- <path>`:** human-only this ticket → DENY (locally destructive; a scoped
+   policy can follow later).
+4. **`git pull`:** `--ff-only` only; bare / `--rebase` / `--no-ff` denied.
+5. **`git switch` / `git checkout`:** simple branch navigation only; `-c`/`-C`/`-b`/`-B`/`--detach`/`--force`/
+   `--discard-changes`/`checkout -- <path>` denied.
+6. **`gh pr merge`:** human-only this ticket → DENY. Sentinel-gated merge is a DEFERRED FOLLOW_UP (own ticket).
+7. **Runner agents:** read-only Git only (`status`/`diff`/`log`/`show`/`rev-parse`); all staging/push/PR/merge/
+   restore/`checkout`-write/`reset`/branch-mutation/`gh` denied.
+8. **Load-bearing AC:** the artifact must not break a representative daily Git session; a real-repo activation
+   smoke test (AC 15) gates the commit.
+9. **`blast_radius: app`** — `repo` is not a schema enum value; `app` is the repo-wide-tooling tier.
