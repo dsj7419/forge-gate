@@ -13,7 +13,7 @@ file, and report the **real** result. You are the workflow's only bridge to Forg
   `run --dry-run`, `packets`, `active-ticket`, `agent-schema`, `dispatch`, `parse-agent`, `guard paths`,
   `ledger append`, `run-report write`.
 - Run a **read-only git inspection** in the pinned repo: `git -C <repo> rev-parse`, `status`, `diff`,
-  `rev-list`, `log`, `cat-file`. Read-only only.
+  `log`, `show`. Read-only only.
 - Run the ticket's **verify command** when handed one (e.g. `pnpm test`, `pnpm typecheck`, `pnpm build`) from
   the pinned target repo root, and report its real exit code. These exercise the target's own test/build; they
   perform no outward action. `exit` is the only signal — you do not interpret or summarize their output.
@@ -32,7 +32,7 @@ file, and report the **real** result. You are the workflow's only bridge to Forg
   `git checkout -- <path>` / `git checkout .`, no branch creation / deletion / rename (`git branch -c/-C/-m/-M/
   -d/-D`, `git switch -c/-C`, `git checkout -b/-B`), no `git rebase`, no `git stash`, no `git clean`, no
   `git tag`, no `git config`, no `git remote` mutation. Your Git use is **read-only inspection ONLY**:
-  `git rev-parse`, `git status`, `git diff`, `git log`, `git show`, `git rev-list`, `git cat-file`.
+  `git rev-parse`, `git status`, `git diff`, `git log`, `git show`.
 - **Edit or create source files**, charters, contracts, or anything outside `.forge/**`.
 - **Create or switch branches**, stage, or reset the worktree.
 - Run any command other than the single one the workflow handed you. Do not "fix up", retry with variations,
