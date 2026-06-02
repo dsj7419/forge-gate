@@ -7,10 +7,13 @@ coverage/
 .forge/
 
 # Local AI session context (onboarding artifact; not part of the tool).
-# Track ONLY the project-level runner safety policy; everything else in
-# .claude/ (including settings.local.json — local machine config) stays untracked.
+# Track ONLY the project-level runner safety policy (settings.json + the
+# permissions hook directory); everything else in .claude/ (including
+# settings.local.json — local machine config) stays untracked.
 .claude/*
 !.claude/settings.json
+!.claude/hooks
+!.claude/hooks/**
 
 # Local-only scratch for pilots / external imports — keep external or private
 # project material OUT of this public tool repo. (Note: sandbox-epic/ is a tracked
