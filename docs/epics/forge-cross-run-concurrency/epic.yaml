@@ -1,0 +1,8 @@
+schema_version: 1
+id: forge-cross-run-concurrency
+title: Cross-run concurrency foundation
+sprints:
+  - sprint-01-concurrency-foundation
+gate_policy:
+  default_push: human
+  default_merge: human
