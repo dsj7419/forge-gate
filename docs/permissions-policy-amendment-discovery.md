@@ -113,6 +113,13 @@ re-usable; this is an additive allowlist + an operational-controls test suite, n
   a `git`/`gh` mention — it cannot tell prose parentheses from shell grouping — so an inline rich `--body` is
   denied. This is **expected safety behavior, not a hook defect**; `--body-file` keeps the body out of the shell
   metacharacter scan entirely. (`gh pr create|view|checks` themselves remain Class-3 allowed.)
+- **Prefer a scope-free PR *title* for agent-driven `gh pr create`.** Scoped Conventional-Commit-style titles such
+  as `docs(policy): ...` include parentheses, which the PreToolUse hook treats as shell-complexity around a `gh`
+  command and refuses. GitHub CLI has `--body-file` but **no equivalent `--title-file`**, so a scoped PR title may
+  require either a human `!gh pr create` or a scope-free PR title (e.g.
+  `docs: clarify hook-safe PR bodies and branch navigation`). **Commit messages may still use the scoped
+  Conventional-Commit form** — only the agent-passed `--title` is affected. This is expected safety behavior, not a
+  hook defect.
 - **`git checkout` is denied in every form** (correcting §6 decision 4 above): the shipped hook permits branch
   navigation only via `git switch <branch>`. Bare-positional `git checkout <name>` is git's silent
   worktree-restore (index/worktree ambiguity), which the hook cannot statically distinguish from a branch
