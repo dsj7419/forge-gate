@@ -69,15 +69,44 @@ export type LedgerEntry = z.infer<typeof LedgerEntrySchema>;
 export type DecisionsLedger = z.infer<typeof DecisionsLedgerSchema>;
 
 /**
- * The only filesystem seam: read the ledger file (or signal absence with
- * `null`) and write its full contents back. Mirrors `InstallReader`'s
- * single-purpose IO interface so tests run against in-memory state.
+ * Result of an atomic compare-and-swap commit. `ok: true` means the new
+ * contents were committed because the on-disk file still matched the snapshot
+ * the caller read; `ok: false` means a concurrent writer changed the file since
+ * that read (contention) and nothing was written.
+ */
+export type AtomicCommitResult = { ok: true } | { ok: false };
+
+/**
+ * The filesystem seam: read the ledger file (or signal absence with `null`) and
+ * commit its full contents back. Mirrors `InstallReader`'s single-purpose IO
+ * interface so tests run against in-memory state.
+ *
+ * `commitAtomic` is the contention-safe write boundary. When provided,
+ * `appendDecision` commits through it, supplying the exact bytes it read as the
+ * compare-and-swap token (`expectedPrior`, `null` when the file was absent at
+ * read time). An all-or-nothing implementation (exclusive-create temp + atomic
+ * rename, with a re-read CAS check) makes an interleaved second appender lose
+ * the race instead of lose-updating or duplicating an id. `commitAtomic` is
+ * optional for source-compatibility with existing seams; when it is absent the
+ * appender falls back to the legacy `writeFile`, so the single-run path is
+ * byte-identical to before.
  */
 export type DecisionsLedgerIo = {
   /** Returns the file's UTF-8 contents or `null` if it does not exist. */
   readFileIfExists: (file: string) => string | null;
   /** Writes the file's UTF-8 contents (caller is responsible for atomicity). */
   writeFile: (file: string, contents: string) => void;
+  /**
+   * Atomically commit `contents` only if the file's current bytes still equal
+   * `expectedPrior` (the snapshot the caller read; `null` ⇒ the caller observed
+   * no file). Returns `{ ok: false }` on a CAS mismatch (a concurrent writer
+   * raced in), writing nothing.
+   */
+  commitAtomic?: (
+    file: string,
+    contents: string,
+    expectedPrior: string | null,
+  ) => AtomicCommitResult;
 };
 
 export type ReadLedgerResult =
@@ -91,7 +120,14 @@ export type AppendLedgerResult =
       // LEDGER_SEQUENCE_INVALID covers the full append sequence-integrity rule:
       // a repeated id, a lower-than-next id, and a higher-than-next (gap) id are
       // all rejected, because the appended id must equal nextDecisionId(existing).
-      code: "LEDGER_INVALID" | "LEDGER_ENTRY_INVALID" | "LEDGER_SEQUENCE_INVALID";
+      // LEDGER_CONTENTION is the atomic-commit CAS miss: a concurrent appender
+      // changed the file between this caller's read and its commit, so nothing
+      // was written (no lost update, no duplicate id).
+      code:
+        | "LEDGER_INVALID"
+        | "LEDGER_ENTRY_INVALID"
+        | "LEDGER_SEQUENCE_INVALID"
+        | "LEDGER_CONTENTION";
       errors: string[];
     };
 
@@ -102,14 +138,19 @@ function describeIssues(error: z.ZodError): string[] {
   });
 }
 
+type ReadLedgerWithRaw =
+  | { ok: true; ledger: DecisionsLedger; raw: string | null }
+  | { ok: false; code: "LEDGER_INVALID"; errors: string[] };
+
 /**
- * Read the ledger file. Missing file → an empty ledger (success). Any other
- * problem (malformed JSON, wrong shape) is a typed `LEDGER_INVALID` failure —
- * never a silent empty, so an upstream bug cannot quietly recycle ids.
+ * Read the ledger and also return the exact bytes observed (`raw`, `null` when
+ * the file is absent). The raw snapshot is the compare-and-swap token an atomic
+ * commit checks against, so a concurrent write between read and commit is
+ * detected.
  */
-export function readDecisionsLedger(file: string, io: DecisionsLedgerIo): ReadLedgerResult {
+function readDecisionsLedgerWithRaw(file: string, io: DecisionsLedgerIo): ReadLedgerWithRaw {
   const contents = io.readFileIfExists(file);
-  if (contents === null) return { ok: true, ledger: { decisions: [] } };
+  if (contents === null) return { ok: true, ledger: { decisions: [] }, raw: null };
 
   let parsedJson: unknown;
   try {
@@ -121,7 +162,18 @@ export function readDecisionsLedger(file: string, io: DecisionsLedgerIo): ReadLe
 
   const parsed = DecisionsLedgerSchema.safeParse(parsedJson);
   if (!parsed.success) return { ok: false, code: "LEDGER_INVALID", errors: describeIssues(parsed.error) };
-  return { ok: true, ledger: parsed.data };
+  return { ok: true, ledger: parsed.data, raw: contents };
+}
+
+/**
+ * Read the ledger file. Missing file → an empty ledger (success). Any other
+ * problem (malformed JSON, wrong shape) is a typed `LEDGER_INVALID` failure —
+ * never a silent empty, so an upstream bug cannot quietly recycle ids.
+ */
+export function readDecisionsLedger(file: string, io: DecisionsLedgerIo): ReadLedgerResult {
+  const result = readDecisionsLedgerWithRaw(file, io);
+  if (!result.ok) return result;
+  return { ok: true, ledger: result.ledger };
 }
 
 /**
@@ -140,7 +192,7 @@ export function appendDecision(
     return { ok: false, code: "LEDGER_ENTRY_INVALID", errors: describeIssues(entryParsed.error) };
   }
 
-  const current = readDecisionsLedger(file, io);
+  const current = readDecisionsLedgerWithRaw(file, io);
   if (!current.ok) return current;
 
   // Verify the proposed id against Core's own deterministic allocator at the
@@ -159,6 +211,28 @@ export function appendDecision(
   }
 
   const next: DecisionsLedger = { decisions: [...current.ledger.decisions, entryParsed.data] };
-  io.writeFile(file, `${JSON.stringify(next, null, 2)}\n`);
+  const contents = `${JSON.stringify(next, null, 2)}\n`;
+
+  // Commit atomically when the seam supports it: the CAS re-checks that the
+  // on-disk bytes still equal `current.raw` (the snapshot the expected id was
+  // computed against). A racing appender that committed in between fails the
+  // CAS, so this caller is rejected with LEDGER_CONTENTION — never a lost update
+  // or a duplicate id. When the seam has no `commitAtomic`, fall back to the
+  // legacy write so the single-run path is byte-identical.
+  if (io.commitAtomic) {
+    const committed = io.commitAtomic(file, contents, current.raw);
+    if (!committed.ok) {
+      return {
+        ok: false,
+        code: "LEDGER_CONTENTION",
+        errors: [
+          `concurrent append detected: the ledger changed between read and commit; ${entryParsed.data.decision_id} was not written`,
+        ],
+      };
+    }
+    return { ok: true, ledger: next };
+  }
+
+  io.writeFile(file, contents);
   return { ok: true, ledger: next };
 }

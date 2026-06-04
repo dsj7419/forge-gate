@@ -22,18 +22,52 @@ import {
  * `defaultDecisionsLedgerIo` (mirrors `defaultRunReportIo`).
  */
 
+function readFileIfExists(file: string): string | null {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch (thrown) {
+    if (isErrno(thrown) && thrown.code === "ENOENT") return null;
+    throw thrown;
+  }
+}
+
 export const defaultDecisionsLedgerIo: DecisionsLedgerIo = {
-  readFileIfExists: (file) => {
-    try {
-      return fs.readFileSync(file, "utf8");
-    } catch (thrown) {
-      if (isErrno(thrown) && thrown.code === "ENOENT") return null;
-      throw thrown;
-    }
-  },
+  readFileIfExists,
   writeFile: (file, contents) => {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, contents, "utf8");
+  },
+  // Atomic compare-and-swap commit: write to an exclusive-create temp file,
+  // re-check that the target's current bytes still equal `expectedPrior` (the
+  // snapshot the caller read), and only then atomically rename the temp over
+  // the target. A racing appender that committed in between changes the bytes,
+  // so the CAS re-check fails and we abort without clobbering. The exclusive
+  // ("wx") temp create plus the all-or-nothing rename make the write boundary
+  // atomic against an interleaved second appender.
+  commitAtomic: (file, contents, expectedPrior) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+
+    // Pre-check the CAS token before doing any work.
+    if (readFileIfExists(file) !== expectedPrior) return { ok: false };
+
+    const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
+    // Exclusive create: a colliding temp name from another in-flight commit
+    // fails here rather than overwriting it.
+    fs.writeFileSync(temp, contents, { encoding: "utf8", flag: "wx" });
+    try {
+      // Re-check the CAS token immediately before the rename — the smallest
+      // window we can achieve without an OS file lock. A concurrent committer
+      // that won the race between the pre-check and here is caught here.
+      if (readFileIfExists(file) !== expectedPrior) {
+        fs.rmSync(temp, { force: true });
+        return { ok: false };
+      }
+      fs.renameSync(temp, file);
+      return { ok: true };
+    } catch (thrown) {
+      fs.rmSync(temp, { force: true });
+      throw thrown;
+    }
   },
 };
 
