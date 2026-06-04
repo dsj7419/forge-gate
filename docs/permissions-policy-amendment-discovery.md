@@ -74,6 +74,9 @@ allowlist. Pass-through for genuinely non-git commands is unchanged.
 4. **`git switch` / `git checkout`:** permit **simple branch navigation only** — `git switch <branch>` /
    `git checkout <branch>`. **Deny** anything that creates/overwrites/detaches/modifies files: `git switch -c`/`-C`,
    `git checkout -b`/`-B`, `--detach`, `git checkout -- <path>`, `git switch --discard-changes`, `--force`.
+   **(Implementation note, 2026-06-03: the SHIPPED hook denies `git checkout` in EVERY form — branch navigation is
+   `git switch <branch>` only, because bare-positional `checkout` is git's silent worktree-restore and cannot be
+   statically disambiguated from a branch name. See the corrected T01 AC2.)**
 5. **Runner agents:** may use **read-only Git only if needed** for evidence gathering — `git status`, `git diff`,
    `git log`, `git show`, `git rev-parse`. **Deny** runner agents ALL mutating/outward actions: `git add`,
    `git push`, `git merge`, `git rebase`, `git reset`, `git restore`, `git checkout -- <path>`, branch mutation,
@@ -101,3 +104,23 @@ Amend the `forge-permissions-policy` T01 contract to the four-class model above 
 robustness; add the Class-1/2 safe-Git allowlist; keep `gh pr merge` human-only + sentinel deferred). **Do not
 implement again until the amendment is approved.** The bulk of the hard security work (the deny side) is done and
 re-usable; this is an additive allowlist + an operational-controls test suite, not a rewrite.
+
+## 9. Post-ship operator notes (added 2026-06-03)
+
+- **Prefer `gh pr create --body-file <file>` for non-trivial PR bodies.** Use a body FILE instead of a long
+  inline `--body "..."` whenever the prose may contain shell-complexity characters (parentheses, `$`, backticks,
+  `;`, `|`, `&`, `<`, `>`, braces). The PreToolUse hook's deny engine intentionally refuses such characters around
+  a `git`/`gh` mention — it cannot tell prose parentheses from shell grouping — so an inline rich `--body` is
+  denied. This is **expected safety behavior, not a hook defect**; `--body-file` keeps the body out of the shell
+  metacharacter scan entirely. (`gh pr create|view|checks` themselves remain Class-3 allowed.)
+- **Prefer a scope-free PR *title* for agent-driven `gh pr create`.** Scoped Conventional-Commit-style titles such
+  as `docs(policy): ...` include parentheses, which the PreToolUse hook treats as shell-complexity around a `gh`
+  command and refuses. GitHub CLI has `--body-file` but **no equivalent `--title-file`**, so a scoped PR title may
+  require either a human `!gh pr create` or a scope-free PR title (e.g.
+  `docs: clarify hook-safe PR bodies and branch navigation`). **Commit messages may still use the scoped
+  Conventional-Commit form** — only the agent-passed `--title` is affected. This is expected safety behavior, not a
+  hook defect.
+- **`git checkout` is denied in every form** (correcting §6 decision 4 above): the shipped hook permits branch
+  navigation only via `git switch <branch>`. Bare-positional `git checkout <name>` is git's silent
+  worktree-restore (index/worktree ambiguity), which the hook cannot statically distinguish from a branch
+  checkout, so the entire `checkout` shape is refused.

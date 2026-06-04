@@ -87,7 +87,9 @@ is a re-scope, not a workaround.
 
 **Class 1 — Safe local / read-only Git → PERMIT** (simple/static exact shapes): `git status`, `git diff`,
 `git log`, `git show`, `git rev-parse`, `git branch` (list only), `git fetch`, `git pull --ff-only`,
-`git switch <branch>`, `git checkout <branch>`. **Challenge destructive/unknown flags per command and DENY them**
+`git switch <branch>`. (**`git checkout` is denied in EVERY form** — bare-positional `checkout` is git's silent
+worktree-restore, which cannot be statically told apart from a branch name; branch navigation is `git switch
+<branch>` only.) **Challenge destructive/unknown flags per command and DENY them**
 (e.g. `git checkout -- <path>` / `git checkout .`, `-f`/`--force`/`--detach`/`--discard-changes`, `git clean`,
 `git pull` without `--ff-only`).
 
@@ -185,8 +187,10 @@ untracked. `.claude/settings.local.json` must remain untracked and is in `forbid
 1. A PreToolUse hook is registered in `.claude/settings.json` and points at a self-contained script under
    `.claude/hooks/` that runs with no package/build dependency.
 2. **Class 1 — operational read-only/local Git is ALLOWED:** `git status`, `git diff`, `git log`, `git show`,
-   `git rev-parse`, `git branch` (list), `git fetch`, `git pull --ff-only`, `git switch <branch>`,
-   `git checkout <branch>` all permitted; their destructive/unknown flags denied.
+   `git rev-parse`, `git branch` (list), `git fetch`, `git pull --ff-only`, `git switch <branch>` all permitted;
+   their destructive/unknown flags denied. **`git checkout` is denied in EVERY form** — branch navigation is
+   `git switch <branch>` only (bare-positional `checkout` is git's silent worktree-restore, which the hook cannot
+   statically disambiguate from a branch name).
 3. **Class 2 — staging:** `git add <explicit-path>` is ALLOWED; `git add .`, `git add -A`, `git add --all`,
    `git add :/`, `git add *` are DENIED.
 4. **Class 3 — PR workflow is ALLOWED:** `git push -u|--set-upstream origin <feature-branch>`, `gh pr create`,
@@ -233,8 +237,10 @@ untracked. `.claude/settings.local.json` must remain untracked and is in `forbid
 3. **`git restore` / `git checkout -- <path>`:** human-only this ticket → DENY (locally destructive; a scoped
    policy can follow later).
 4. **`git pull`:** `--ff-only` only; bare / `--rebase` / `--no-ff` denied.
-5. **`git switch` / `git checkout`:** simple branch navigation only; `-c`/`-C`/`-b`/`-B`/`--detach`/`--force`/
-   `--discard-changes`/`checkout -- <path>` denied.
+5. **`git switch`:** simple branch navigation only (`git switch <branch>`); `-c`/`-C`/`--detach`/`--force`/
+   `--discard-changes` denied. **`git checkout`: denied in EVERY form** — bare-positional `checkout` can restore
+   files from the index/worktree ambiguity, so branch navigation is `git switch <branch>` only; `-b`/`-B`/
+   `--detach`/`--force`/`checkout -- <path>` all denied.
 6. **`gh pr merge`:** human-only this ticket → DENY. Sentinel-gated merge is a DEFERRED FOLLOW_UP (own ticket).
 7. **Runner agents:** read-only Git only (`status`/`diff`/`log`/`show`/`rev-parse`); all staging/push/PR/merge/
    restore/`checkout`-write/`reset`/branch-mutation/`gh` denied.
