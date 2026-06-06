@@ -1,0 +1,8 @@
+schema_version: 1
+id: forge-lock-wiring
+title: Lock wiring — Core CLI surface for the epic lock
+sprints:
+  - sprint-01-lock-cli-surface
+gate_policy:
+  default_push: human
+  default_merge: human
