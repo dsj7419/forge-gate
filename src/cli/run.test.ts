@@ -1141,6 +1141,79 @@ describe("runCli ledger append routing", () => {
   });
 });
 
+describe("runCli lock routing", () => {
+  const lockKey = (epic: string): string =>
+    `${epic.replace(/[\\/]+$/, "")}/.forge/lock.json`.replace(/\\/g, "/");
+
+  function memoryLockIo(initial: Record<string, string> = {}): {
+    lockIo: import("../orchestrator/lock.js").LockIo;
+    state: Record<string, string>;
+    creates: string[];
+  } {
+    const state: Record<string, string> = { ...initial };
+    const creates: string[] = [];
+    const norm = (file: string): string => file.replace(/\\/g, "/");
+    const has = (file: string): boolean => Object.prototype.hasOwnProperty.call(state, norm(file));
+    return {
+      state,
+      creates,
+      lockIo: {
+        createExclusive: (file, contents) => {
+          if (has(file)) return { ok: false };
+          state[norm(file)] = contents;
+          creates.push(norm(file));
+          return { ok: true };
+        },
+        readFileIfExists: (file) => (has(file) ? (state[norm(file)] ?? null) : null),
+        removeFile: (file) => {
+          delete state[norm(file)];
+        },
+      },
+    };
+  }
+
+  test("USAGE advertises forge lock", () => {
+    const { io, err } = fakeIo();
+    runCli(["frobnicate"], io);
+    expect(err.join("\n")).toContain("forge lock acquire");
+  });
+
+  test("routes lock acquire through the injected LockIo seam behind options.lockIo (exit 0)", () => {
+    const epic = "/epic/example";
+    const { lockIo, creates } = memoryLockIo();
+    const { io, out } = fakeIo();
+    const code = runCli(
+      [
+        "lock",
+        "acquire",
+        epic,
+        "--run-id",
+        "run-A",
+        "--session-id",
+        "sess-A",
+        "--ticket",
+        "T01",
+        "--branch",
+        "forge/x/T01",
+        "--repo-root",
+        "/repo",
+      ],
+      io,
+      { lockIo },
+    );
+    expect(code).toBe(0);
+    expect(creates).toEqual([lockKey(epic)]);
+    expect(JSON.parse(out.join("\n")).ok).toBe(true);
+  });
+
+  test("an invalid `forge lock <bad>` is a usage error (exit 2)", () => {
+    const { lockIo } = memoryLockIo();
+    const { io, err } = fakeIo();
+    expect(runCli(["lock", "bogus"], io, { lockIo })).toBe(2);
+    expect(err.join("\n")).toMatch(/usage/i);
+  });
+});
+
 describe("runCli parse-agent — structured (JSON) modes", () => {
   const engineerObj = {
     ticket: "T01",
