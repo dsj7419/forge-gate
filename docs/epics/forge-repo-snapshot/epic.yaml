@@ -1,0 +1,8 @@
+schema_version: 1
+id: forge-repo-snapshot
+title: Core-owned repo snapshot — hook-compatible read-only git facts for the workflow runner
+sprints:
+  - sprint-01-repo-snapshot
+gate_policy:
+  default_push: human
+  default_merge: human
