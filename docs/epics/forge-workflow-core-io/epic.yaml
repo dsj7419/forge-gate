@@ -1,0 +1,8 @@
+schema_version: 1
+id: forge-workflow-core-io
+title: Core-owned workflow artifact write + Core-fed scope diff for full workflow PASS
+sprints:
+  - sprint-01-core-io
+gate_policy:
+  default_push: human
+  default_merge: human
