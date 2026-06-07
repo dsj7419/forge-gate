@@ -341,16 +341,26 @@ const checkpointBase = preflightSnapshot.head;
 // and the run-report writer (which sources the gate from this file).
 // ===========================================================================
 await phase("active-ticket");
-const activeTicket = await runCoreJson(
-  `${forgeBin} active-ticket "${epic}" --json --repo-root "${repoRoot}"`,
+// Core writes the gate-bearing active-ticket BYTE-EXACT to the file via its own
+// fs (`forge active-ticket … --out`). This REPLACES the old path of fetching the
+// JSON to the workflow and re-persisting it via `writeForgeFile` (the prose
+// "write exact bytes" round-trip corrupted Windows-path backslashes in
+// `repo_root` → invalid JSON → guard `ACTIVE_TICKET_INVALID`). `--out` exits
+// non-zero (writing nothing) on a blocked / no-ready-ticket selection.
+const activeTicketWritten = await runCoreOk(
+  `${forgeBin} active-ticket "${epic}" --json --repo-root "${repoRoot}" --out "${forgeDir}/active-ticket.json"`,
 );
-await writeForgeFile("active-ticket.json", activeTicket);
+if (!activeTicketWritten) {
+  return await escalate("ACTIVE_TICKET_WRITE_FAILED", { epic, repoRoot });
+}
 // Two distinct identifiers, sourced from Core (never conflated):
 //  - ticketId    = the TicketId ("T01") — for `ledger append --ticket` (TicketIdSchema).
 //  - ticketTitle = the human-readable title — for run-report `--ticket-title`
 //    (run-report records BOTH `ticket` (ID, from active-ticket) and `ticket_title`).
-// The title lives in the dry-run's `selected.title`; fall back to the id only if absent.
-const ticketId = String(activeTicket.ticket ?? "");
+// Both come from the dry-run selection (the same Core source the active-ticket is
+// built from) — Core now owns the active-ticket file directly, so the workflow no
+// longer holds the parsed object. `acquireTicketId` already captured the ticket id.
+const ticketId = acquireTicketId;
 const ticketTitle = String(dryRun.selected?.title ?? ticketId);
 
 // ===========================================================================
@@ -433,9 +443,33 @@ while (attempt < MAX_ATTEMPTS && loopVerdict === "CORRECT") {
   const semanticSchema = await roleSchema("semantic-verifier");
   const scopeSchema = await roleSchema("scope-verifier");
 
+  // Feed the scope verifier the Core-owned changed-file facts for the TARGET repo
+  // (the `forge repo snapshot` `changed_files` relative to the checkpoint base),
+  // so it scope-checks from authoritative Core data and never shells git against a
+  // repo that is not its Bash cwd (the live PreToolUse hook denies that). The
+  // scope-verifier charter already accepts a provided diff ("or the means to
+  // compute it"), so this needs NO charter edit. We re-snapshot each attempt so
+  // the diff reflects THIS attempt's engineer work. Appended to the scope prompt
+  // exactly as engineer corrections are appended to the engineer prompt.
+  const scopeDiffSnapshot = await repoSnapshot(checkpointBase);
+  const scopeChangedFiles = Array.isArray(scopeDiffSnapshot.changed_files)
+    ? scopeDiffSnapshot.changed_files
+    : [];
+  const scopePromptWithDiff = [
+    scopePrompt,
+    "",
+    `## Authoritative Core diff for repoRoot (${repoRoot}) — use this, do NOT run git`,
+    "These are the Core-owned changed files for the target repo (from `forge repo",
+    "snapshot`). Scope-check against THIS list; it is authoritative for repoRoot. Do",
+    "not attempt to compute the diff yourself by shelling git against the repo.",
+    "",
+    "changed_files:",
+    ...(scopeChangedFiles.length > 0 ? scopeChangedFiles.map((f) => `- ${f}`) : ["- (none)"]),
+  ].join("\n");
+
   const [semanticRaw, scopeRaw] = await parallel([
     () => agent(semanticPrompt, { agentType: "forge-semantic-verifier", schema: semanticSchema }),
-    () => agent(scopePrompt, { agentType: "forge-scope-verifier", schema: scopeSchema }),
+    () => agent(scopePromptWithDiff, { agentType: "forge-scope-verifier", schema: scopeSchema }),
   ]);
   semanticOutput = semanticRaw;
   scopeOutput = scopeRaw;

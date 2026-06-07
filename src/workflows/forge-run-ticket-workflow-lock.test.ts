@@ -93,7 +93,10 @@ describe("forge-run-ticket workflow ↔ forge lock wiring", () => {
     it("acquire appears before the active-ticket emission", () => {
       const src = text();
       const acquireIdx = src.indexOf("forge lock acquire");
-      const activeTicketIdx = src.indexOf('writeForgeFile("active-ticket.json"');
+      // Core now writes the active-ticket byte-exact via `forge active-ticket … --out`
+      // (the prose `writeForgeFile("active-ticket.json"` byte-write was retired); the
+      // ordering invariant — acquire BEFORE active-ticket emission — is unchanged.
+      const activeTicketIdx = src.indexOf('activeTicketWritten');
       expect(acquireIdx).toBeGreaterThan(-1);
       expect(activeTicketIdx).toBeGreaterThan(-1);
       expect(acquireIdx).toBeLessThan(activeTicketIdx);
@@ -198,6 +201,63 @@ describe("forge-run-ticket workflow ↔ forge repo snapshot wiring", () => {
 
     it("does not define the retired runGitInt helper", () => {
       expect(text()).not.toContain("runGitInt");
+    });
+  });
+});
+
+/**
+ * Protocol-lock test: the two blockers the workflow live-proof rerun found are
+ * closed so the runner reaches full happy-path PASS under the live hook.
+ *
+ *  1. Core writes the active-ticket byte-exact via `forge active-ticket … --out`
+ *     (a Core-owned fs write), instead of handing JSON bytes to the core-runner
+ *     agent to "write exact bytes" (which corrupted Windows-path backslashes in
+ *     `repo_root` → invalid JSON → guard `ACTIVE_TICKET_INVALID`).
+ *  2. The scope verifier scope-checks from Core-owned changed-file facts (the
+ *     `forge repo snapshot` `changed_files`) injected into its dispatch prompt,
+ *     instead of shelling git against a repo that is not its Bash cwd.
+ *
+ * NON-TAUTOLOGICAL: asserts the PRESENCE of `active-ticket … --out` and the
+ * Core-diff-into-scope-verifier wiring, and the ABSENCE of the prose byte-write
+ * for active-ticket (no `writeForgeFile("active-ticket.json"` call).
+ */
+describe("forge-run-ticket workflow ↔ Core-owned active-ticket write + Core-fed scope diff", () => {
+  describe("present: Core writes the active-ticket byte-exact via --out", () => {
+    it("calls forge active-ticket with --out targeting the .forge active-ticket.json path", () => {
+      const src = text();
+      expect(src).toMatch(/active-ticket\b[^]*?--out/);
+      // The --out target is the .forge active-ticket.json the guard reads.
+      expect(src).toMatch(/--out[^]*?active-ticket\.json/);
+    });
+  });
+
+  describe("absent: the prose byte-write for active-ticket is gone (non-tautological half)", () => {
+    it('does not route active-ticket.json through writeForgeFile (the agent byte-write)', () => {
+      expect(text()).not.toContain('writeForgeFile("active-ticket.json"');
+    });
+  });
+
+  describe("present: the scope verifier is fed the Core repo-snapshot changed files", () => {
+    it("injects the Core changed_files into the scope-verifier dispatch prompt", () => {
+      const src = text();
+      // The scope prompt the verifier receives must carry the authoritative Core
+      // diff; assert the snapshot changed_files are appended to the scope prompt
+      // before the scope-verifier agent dispatch (mirroring engineer corrections).
+      const scopePromptIdx = src.indexOf("scopePrompt");
+      const scopeDispatchIdx = src.indexOf('agentType: "forge-scope-verifier"');
+      expect(scopePromptIdx).toBeGreaterThan(-1);
+      expect(scopeDispatchIdx).toBeGreaterThan(-1);
+      // A scope prompt augmented with the Core diff exists and is what is dispatched.
+      expect(src).toMatch(/scopePromptWithDiff|scopePrompt\b[^]*?changed_files/);
+      // The label tells the verifier this is the authoritative Core diff for repoRoot
+      // to use instead of running git.
+      expect(src).toMatch(/authoritative[^]*?repoRoot|Core diff[^]*?repoRoot/i);
+    });
+
+    it("the scope-verifier dispatch uses the diff-augmented prompt, not the bare scopePrompt", () => {
+      const src = text();
+      // The dispatch call for the scope verifier passes the augmented prompt variable.
+      expect(src).toMatch(/agent\(\s*scopePromptWithDiff/);
     });
   });
 });
