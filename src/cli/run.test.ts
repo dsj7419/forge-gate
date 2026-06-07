@@ -1214,6 +1214,43 @@ describe("runCli lock routing", () => {
   });
 });
 
+describe("runCli repo routing", () => {
+  function memoryRepoGit(): import("../repo/snapshot.js").RepoGit {
+    return {
+      head: () => "h1",
+      branch: () => "b1",
+      statusPorcelain: () => "",
+      revListCount: () => 2,
+    };
+  }
+
+  test("USAGE advertises forge repo snapshot", () => {
+    const { io, err } = fakeIo();
+    runCli(["frobnicate"], io);
+    expect(err.join("\n")).toContain("forge repo snapshot");
+  });
+
+  test("routes repo snapshot through the injected RepoGit seam behind options.repoGit (exit 0)", () => {
+    const { io, out } = fakeIo();
+    const code = runCli(["repo", "snapshot", "--repo-root", "/repo"], io, { repoGit: memoryRepoGit() });
+    expect(code).toBe(0);
+    expect(JSON.parse(out.join("\n"))).toEqual({
+      repo_root: "/repo",
+      clean: true,
+      changed_files: [],
+      head: "h1",
+      branch: "b1",
+      ahead_of_base: null,
+    });
+  });
+
+  test("an invalid `forge repo <bad>` is a usage error (exit 2)", () => {
+    const { io, err } = fakeIo();
+    expect(runCli(["repo", "bogus"], io, { repoGit: memoryRepoGit() })).toBe(2);
+    expect(err.join("\n")).toMatch(/usage/i);
+  });
+});
+
 describe("runCli parse-agent — structured (JSON) modes", () => {
   const engineerObj = {
     ticket: "T01",
