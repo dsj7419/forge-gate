@@ -93,28 +93,63 @@ contract files. The engineer may edit only the ticket's `allowed_paths`. Every a
 evidence gathered outside `repo_root` is invalid. Every agent output MUST pass `forge parse-agent`. Malformed
 output → ESCALATE. Failed verify → correct/escalate. Scope violation → correct/escalate. Correction cap = 3.
 Only writes allowed: a branch ref, the engineer's `allowed_paths` edits, and gitignored `.forge/` runtime
-(`active-ticket.json`, `lock.json`, `run-report.json`, `decisions-ledger.json`). If `.forge/` is not gitignored, STOP and escalate.
+(`active-ticket.json`, `lock.json`, `run-report.json`, `decisions-ledger.json`). `lock.json` is still written —
+now **only** via the atomic `forge lock acquire` (step 3), never hand-authored. If `.forge/` is not gitignored,
+STOP and escalate.
+
+**Lock recovery (no force-break in this slice).** A lock left on disk by a hard interruption or process death is
+seen by the next run via `forge lock status "$EPIC"`, which reports a **stale** verdict (report-only — it never
+clears or steals). Clearing a stale or foreign lock is **not automated**: any force-break / stale-clear /
+foreign-clear is a **deferred slice**, so this command **never force-breaks** a lock. (This is a deliberate
+divergence from the workflow-backed runner, which keeps its current behavior until a later slice wires it.)
 
 ## Procedure
 
 1. **Preflight (read-only):** run `$FORGE validate "$EPIC"` and `$FORGE run "$EPIC" --dry-run`. If validate
    FAILS or run is BLOCKED → stop and report; do nothing else. Then `git -C "$TARGET_REPO" status --porcelain` — if
-   the tree is dirty → STOP (`DIRTY_TREE`), ask the human. Check `$EPIC/.forge/lock.json` — if present →
-   STOP (`LOCK_EXISTS`), show recovery (`rm` the lock if stale by pid/age); never overwrite silently.
+   the tree is dirty → STOP (`DIRTY_TREE`), ask the human. **Do not pre-check the lock here.** The old
+   check-then-act existence test was a TOCTOU race; the atomic `forge lock acquire` in step 3 is the authoritative,
+   race-free gate. (An optional, non-authoritative `forge lock status "$EPIC"` read may be shown as a friendly
+   early diagnostic, but it must **not** gate the run; the default is to omit it and let acquire be the only gate.)
 2. **Packets:** `$FORGE packets "$EPIC" --repo-root "$TARGET_REPO"` → the packet set (pins absolute `repo_root`
    = `$TARGET_REPO` + cwd discipline). Record the selected ticket, branch, allowed/forbidden paths, **and the
    Core-derived effective gate** — `active_run.gate.{declared, effective, human_required}` — captured as
    `$GATE_DECLARED`, `$GATE_EFFECTIVE`, `$GATE_HUMAN_REQUIRED` for use in step 10/11. These are the
    authoritative gate values the run-report writer cross-checks against the PM's emitted `human_gate_required`.
-3. **Lock + checkpoint:** write `$EPIC/.forge/lock.json` (`{session_id, command, epic_path, ticket, branch, repo_root,
-   pid, started_at}`). Emit the active-ticket contract **deterministically from Core** — do **not** hand-author
+3. **Acquire the lock, then checkpoint:** the epic lock is the **primary cross-run serialization guarantee** for
+   this orchestrator. Acquire it **first** — at the very top of this step, **before active-ticket emission** and
+   **before branch creation** (step 4). Acquire is the first mutation-adjacent action; nothing is written and no
+   branch is created until it succeeds.
+   - **Generate the run identity.** Mint a unique `RUN_ID` (the ownership / release key, held for the whole run)
+     and a diagnostic `SESSION_ID`, using the `node` the command already shells:
+     `RUN_ID="$(node -e 'process.stdout.write(crypto.randomUUID())')"` and likewise
+     `SESSION_ID="$(node -e 'process.stdout.write(crypto.randomUUID())')"`.
+   - **Acquire atomically via Core** — do **not** hand-write `lock.json`; `forge lock acquire` is the only writer:
+     `$FORGE lock acquire "$EPIC" --run-id "$RUN_ID" --session-id "$SESSION_ID" --ticket "<selected-ticket-id>"
+     --branch "<branch>" --repo-root "$TARGET_REPO"` (ticket id + branch from `packets` in step 2). It writes
+     `$EPIC/.forge/lock.json` as a `forge-lock/v1` record; `pid`/`host`/timestamps are Core-filled. The acquire is
+     atomic and **never overwrites a held lock**, which is what closes the old check-then-write TOCTOU.
+   - **On acquire success (exit 0):** proceed to active-ticket emission below, then checkpoint, then branch (step 4).
+   - **On `LOCK_HELD` (exit 1):** STOP **before any mutation** — no active-ticket emission, no branch, no engineer
+     dispatch. Report the holder from the `holder` field; tell the human another run owns this epic.
+   - **On `LOCK_MALFORMED` (exit 1):** STOP **before any mutation**; surface the on-disk lock as corrupt and require
+     human investigation. **Never** clobber or auto-clear it (stale-recovery is a deferred slice).
+   - **On any other non-zero / undecidable acquire result:** STOP before any mutation; fail closed.
+   - *Why acquire is sufficient (carry-forward):* with the lock wiring serializing appends, the epic lock is the
+     primary serialization and the CAS ledger append remains **defense-in-depth**; the residual CAS
+     re-check-to-rename window is acceptable precisely because this acquire serializes the run.
+
+   On acquire success, emit the active-ticket contract **deterministically from Core** — do **not** hand-author
    its shape — `$FORGE active-ticket "$EPIC" --json --repo-root "$TARGET_REPO" > "$EPIC/.forge/active-ticket.json"`.
    (The write path derives from the absolute `$EPIC` directly — never joined onto another root; `--repo-root`
    pins the emitted `repo_root` to `$TARGET_REPO` regardless of the CLI's working directory.) Core owns
    `forge-active-ticket/v1` (absolute `repo_root` = `$TARGET_REPO`, `epic_path`, `ticket`, `branch`,
    allowed/forbidden/protected paths) and selects the same ticket this run executes. Record checkpoint
    `{base, HEAD}` from `git -C "$TARGET_REPO" rev-parse HEAD`.
-4. **Branch:** `git -C "$TARGET_REPO" switch -c <branch>` (off the integration base, from the clean tree).
+4. **Branch:** `git -C "$TARGET_REPO" switch -c <branch>` (off the integration base, from the clean tree). The lock
+   acquired in step 3 is **held across** every subsequent step — including all CORRECT correction cycles
+   (steps 5–9) — and is released only on a terminal outcome (PASS in step 10, ESCALATE in step 11). Never release
+   between correction cycles.
 Every agent step below obeys the **Capture discipline** above: dispatch the
 agent → wait for the actual agent return → capture the exact returned text
 verbatim → write it to `.forge/<role>-output.yaml` → run `forge parse-agent` →
@@ -183,9 +218,14 @@ synthesized output.
 
    Decision:
    - **CORRECT** → re-dispatch the engineer with the PM's bounded instructions (cycle ≤ 3; the 4th →
-     `CORRECTION_CAP_REACHED` → ESCALATE), then re-run 6–9.
+     `CORRECTION_CAP_REACHED` → ESCALATE), then re-run 6–9. The lock stays **held across** all correction cycles —
+     do **not** release between cycles; release only on a terminal outcome.
    - **ESCALATE** → step 11.
    - **PASS** → step 10.
+
+   **Malformed agent output / parse failure (any role).** A halt (`AGENT_OUTPUT_INVALID`, missing required fields,
+   or a decision-id mismatch) routes to **ESCALATE → step 11**, where the **owner-checked** release runs. This is
+   safe because the orchestrator provably owns the lock (it holds `$RUN_ID`) and ESCALATE is a terminal stop state.
 10. **Commit gate (PASS):** invoke Core to write the run-report — the orchestrator no longer hand-builds the
     JSON. Core owns `forge-run-report/v1`: it validates every input, enforces the v1 safety invariants in the
     schema (`safety.committed`/`pushed`/`pr_opened`/`merged`/`status_write_back`/`journal_written` are typed
@@ -203,18 +243,27 @@ synthesized output.
     resolved-path containment (`--out` outside `.forge/` → `OUT_PATH_OUTSIDE_FORGE`). If Core returns a typed
     failure (`AGENT_OUTPUT_INVALID`, `FACTS_INVALID`, `ACTIVE_TICKET_INVALID`, `HUMAN_GATE_MISMATCH`,
     `RESULT_REQUIRES_GREEN`, `RUN_REPORT_INVALID`, `OUT_PATH_OUTSIDE_FORGE`) → ESCALATE; do **not** invent or
-    repair the report. Release `$EPIC/.forge/lock.json`. Print the handoff: changed files, verification
-    summary, PM decision, **proposed** status transition (`<ticket> pending → ready_for_pr`, not applied), a
-    suggested commit message, and the exact suggested `git add`/`git commit` command. **Do NOT commit.** Stop.
+    repair the report. **Release the lock — owner-checked — after the run-report is written and the ledger append
+    (step 9f) has succeeded** (order: ledger append → run-report write → release):
+    `$FORGE lock release "$EPIC" --run-id "$RUN_ID"`. The `forge lock release` surface is owner-checked by `run_id`
+    and **never forced**: if
+    it returns `LOCK_FOREIGN`, `LOCK_ABSENT`, or `LOCK_MALFORMED`, **report the anomaly to the human and do not
+    force-clear** the file (force-break / stale-clear is a deferred slice). Print the handoff: changed files,
+    verification summary, PM decision, **proposed** status transition (`<ticket> pending → ready_for_pr`, not
+    applied), a suggested commit message, and the exact suggested `git add`/`git commit` command. **Do NOT commit.**
+    Stop.
 11. **Failure (preserve evidence):** invoke Core to write the evidence run-report —
     `$FORGE run-report write "$EPIC" --repo-root "$TARGET_REPO" --result ESCALATE --ticket-title "<title>"
     --checkpoint-base "$BASE_SHA" --checkpoint-head "$HEAD_SHA" --guard-result "$GUARD_RESULT"
     --guard-exit "$GUARD_EXIT" --gate-declared "$GATE_DECLARED" --gate-effective "$GATE_EFFECTIVE"
     --gate-human-required "$GATE_HUMAN_REQUIRED" [--note …]` (same defaults and fences as step 10;
     `result: "ESCALATE"` is accepted regardless of verifier/PM outcome, so the artifact records the terminal
-    failure faithfully). Release the lock; produce a recovery brief (failure code, decision, changed files,
-    checkpoint HEAD, branch, commands, verify results, scope findings, **suggested** cleanup/rollback commands
-    — shown, not executed). Leave the branch + working tree intact. Ask the human. Auto-clean only the lock.
+    failure faithfully). **Release the lock — owner-checked — after the evidence run-report is written:**
+    `$FORGE lock release "$EPIC" --run-id "$RUN_ID"`. As in step 10, release is owner-checked and **never forced**:
+    a `LOCK_FOREIGN` / `LOCK_ABSENT` / `LOCK_MALFORMED` result is **reported to the human, not force-cleared**.
+    Produce a recovery brief (failure code, decision, changed files, checkpoint HEAD, branch, commands, verify
+    results, scope findings, **suggested** cleanup/rollback commands — shown, not executed). Leave the branch +
+    working tree intact. Ask the human. The only auto-clean is the owner-checked lock release above.
 
 ## Hard rules (capture discipline)
 
