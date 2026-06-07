@@ -150,3 +150,54 @@ describe("forge-run-ticket workflow ↔ forge lock wiring", () => {
     });
   });
 });
+
+/**
+ * Protocol-lock test: the workflow obtains every read-only repo fact from
+ * `forge repo snapshot` through the typed core-runner bridge, and NO LONGER
+ * shells raw `git -C` (which the live PreToolUse Bash hook intercepts).
+ *
+ * NON-TAUTOLOGICAL: asserts both the PRESENCE of `repo snapshot` wiring AND the
+ * ABSENCE of every raw-git surface (`git -C`, and the retired
+ * `runGitText`/`runGitInt` helpers). If a future edit re-introduces a raw git
+ * call or drops the snapshot wiring, this goes red.
+ */
+describe("forge-run-ticket workflow ↔ forge repo snapshot wiring", () => {
+  describe("present: read-only repo facts via the snapshot bridge", () => {
+    it("calls forge repo snapshot", () => {
+      expect(text()).toMatch(/repo snapshot/);
+    });
+
+    it("derives the preflight clean-tree precondition from the snapshot (a `clean` field)", () => {
+      const src = text();
+      // The snapshot's `clean` boolean drives the dirty-tree escalate.
+      expect(src).toMatch(/\.clean/);
+      expect(src).toContain("PREFLIGHT_DIRTY_TREE");
+    });
+
+    it("derives checkpoint base/head and branch from the snapshot (head/branch fields)", () => {
+      const src = text();
+      expect(src).toMatch(/\.head\b/);
+      expect(src).toMatch(/\.branch\b/);
+    });
+
+    it("derives final changed-files and ahead-of-base from the snapshot", () => {
+      const src = text();
+      expect(src).toMatch(/changed_files/);
+      expect(src).toMatch(/ahead_of_base/);
+    });
+  });
+
+  describe("absent: raw git surfaces are gone (non-tautological half)", () => {
+    it("contains no raw `git -C` call", () => {
+      expect(text()).not.toMatch(/git -C/);
+    });
+
+    it("does not define the retired runGitText helper", () => {
+      expect(text()).not.toContain("runGitText");
+    });
+
+    it("does not define the retired runGitInt helper", () => {
+      expect(text()).not.toContain("runGitInt");
+    });
+  });
+});

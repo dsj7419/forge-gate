@@ -16,6 +16,7 @@ import { readDecisionsLedger, type DecisionsLedgerIo } from "../orchestrator/dec
 import { defaultDecisionsLedgerIo, runLedger } from "../orchestrator/ledger-cli.js";
 import { defaultLockIo, runLock } from "../orchestrator/lock-cli.js";
 import type { LockIo } from "../orchestrator/lock.js";
+import { defaultRepoGit, runRepo, type RepoGit } from "../repo/snapshot.js";
 import { runDryRun } from "../run/dry-run.js";
 import { defaultRunReportIo, runWriteRunReport, type RunReportIo } from "../run-report/cli.js";
 import { buildReport, type ValidationReport } from "../validate/findings.js";
@@ -47,6 +48,7 @@ export type RunCliOptions = {
   runReportIo?: RunReportIo;
   decisionsLedgerIo?: DecisionsLedgerIo;
   lockIo?: LockIo;
+  repoGit?: RepoGit;
 };
 
 const USAGE =
@@ -61,6 +63,7 @@ const USAGE =
   "       forge lock acquire <epic> --run-id <id> --session-id <s> --ticket <t> --branch <b> --repo-root <r>\n" +
   "       forge lock release <epic> --run-id <id>\n" +
   "       forge lock status <epic> [--heartbeat-ttl-ms <n>] [--acquire-ttl-ms <n>]\n" +
+  "       forge repo snapshot --repo-root <path> [--base <sha>]\n" +
   "       forge parse-agent <role> (--file <path> | --stdin | --json-file <path> | --json-stdin) [--expected-decision-id <D-NNN> (pm only)]\n" +
   "       forge agent-schema <role>\n" +
   "       forge active-ticket <epic-path> [--json] [--repo-root <path>]\n" +
@@ -81,6 +84,10 @@ export function runCli(argv: string[], io: CliIo, options: RunCliOptions = {}): 
 
   if (command === "lock") {
     return runLock(argv.slice(1), io, options.lockIo ?? defaultLockIo);
+  }
+
+  if (command === "repo") {
+    return runRepo(argv.slice(1), io, options.repoGit ?? defaultRepoGit);
   }
 
   if (command === "validate") {

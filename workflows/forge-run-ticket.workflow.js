@@ -20,8 +20,12 @@
  *
  *   `exit` is the authoritative success/failure signal. `stdout` is parsed
  *   EXPLICITLY at the helper boundary, per the invoked command: JSON for the
- *   forge JSON commands, text for git, exit-signal only for pnpm verify and
- *   run-report write. The script NEVER reads `.ok`/`.exit`/`.result`/`.verdict`/
+ *   forge JSON commands (including `forge repo snapshot`, which supplies every
+ *   read-only repo fact), exit-signal only for pnpm verify and run-report write.
+ *   No raw git is shelled — repo facts come from the Core snapshot, whose git
+ *   runs internally via execFileSync (never a Bash tool call), so the live
+ *   permissions hook never intercepts them. The script NEVER reads
+ *   `.ok`/`.exit`/`.result`/`.verdict`/
  *   arrays/objects off a raw natural-language agent string. The role agents
  *   (engineer / semantic-verifier / scope-verifier / pm) keep their own schema
  *   and return typed objects through their own `agent({schema})` calls.
@@ -174,19 +178,19 @@ async function runCoreOk(commandLine) {
   return res.exit === 0;
 }
 
-/** runGitText — read-only git inspection; stdout as trimmed text. */
-async function runGitText(gitArgs) {
-  const res = await runCore(`git -C "${repoRoot}" ${gitArgs}`);
-  if (res.exit !== 0) {
-    throw new Error(`git command failed (exit ${res.exit}): git -C ${repoRoot} ${gitArgs}\n${res.stderr ?? ""}`);
-  }
-  return res.stdout.trim();
-}
-
-/** runGitInt — git text parsed to an int (e.g. rev-list --count). */
-async function runGitInt(gitArgs) {
-  const text = await runGitText(gitArgs);
-  return Number.parseInt(text, 10);
+/**
+ * repoSnapshot — the ONE read-only repo-facts source. Routes through Core's
+ * `forge repo snapshot`, which runs git via an internal `execFileSync` spawn
+ * (NOT a Bash tool call), so the live PreToolUse Bash hook never intercepts it —
+ * the whole point of this seam. NO raw git is shelled through the Bash tool
+ * anywhere in this workflow. Returns the typed snapshot object:
+ *   { repo_root, clean, changed_files, head, branch, ahead_of_base }
+ * `--base` is supplied only at handoff so `ahead_of_base` is computed; when
+ * omitted (preflight) it is null.
+ */
+async function repoSnapshot(base) {
+  const baseFlag = base === undefined ? "" : ` --base ${base}`;
+  return await runCoreJson(`${forgeBin} repo snapshot --repo-root "${repoRoot}"${baseFlag}`);
 }
 
 /** runVerify — pnpm verify commands are EXIT-SIGNAL ONLY. */
@@ -284,11 +288,14 @@ if (dryRun.ok !== true) {
   return await escalate("PREFLIGHT_DRY_RUN_FAILED", { dryRun });
 }
 
-// Clean-tree precondition (read-only git through the core-runner). Branch
-// creation is the launcher's job; the workflow is already on the run branch.
-const treeStatus = await runGitText("status --porcelain");
-if (treeStatus.length !== 0) {
-  return await escalate("PREFLIGHT_DIRTY_TREE", { treeStatus });
+// One read-only repo snapshot (no --base) yields every preflight fact: the
+// clean-tree precondition, the current branch (acquireBranch), and the
+// checkpoint base (head). It routes through Core's internal execFileSync git, so
+// no raw git is shelled through Bash. Branch creation is the launcher's job; the
+// workflow is already on the run branch.
+const preflightSnapshot = await repoSnapshot();
+if (preflightSnapshot.clean !== true) {
+  return await escalate("PREFLIGHT_DIRTY_TREE", { changed_files: preflightSnapshot.changed_files });
 }
 
 // Atomic cross-run lock acquire — the create IS the mutual exclusion. This
@@ -296,10 +303,10 @@ if (treeStatus.length !== 0) {
 // check-then-act TOCTOU the command path retired). It runs AFTER the clean-tree
 // check and BEFORE checkpoint capture and active-ticket emission, so no mutation
 // happens until the run provably owns the lock. Ticket id is sourced from the
-// dry-run selection and the branch from `git rev-parse --abbrev-ref HEAD`, both
+// dry-run selection and the branch from the preflight snapshot, both captured
 // before active-ticket emission (which is NOT reordered ahead of acquire).
 const acquireTicketId = String(dryRun.selected?.ticket ?? "");
-const acquireBranch = await runGitText("rev-parse --abbrev-ref HEAD");
+const acquireBranch = preflightSnapshot.branch;
 const lockAcquire = await runCoreJsonResult(
   [
     `${forgeBin} lock acquire "${epic}"`,
@@ -323,8 +330,10 @@ if (lockAcquire.exit === 0 && lockAcquire.json.ok === true) {
   return await escalate("PREFLIGHT_LOCK_ACQUIRE_FAILED", { acquire: lockAcquire.json });
 }
 
-// Checkpoint base for the run-report (read-only).
-const checkpointBase = await runGitText("rev-parse HEAD");
+// Checkpoint base for the run-report — the HEAD captured by the preflight
+// snapshot (read-only). Assigned AFTER the lock acquire so the run provably owns
+// the lock before any checkpoint is recorded (ordering preserved).
+const checkpointBase = preflightSnapshot.head;
 
 // ===========================================================================
 // Phase 2 — Core emits the gate-bearing active-ticket.
@@ -498,18 +507,13 @@ log(`pm: ledger-derived expected decision id = ${expectedDecisionId}`);
 // a trust boundary `dispatch pm` reads, so it MUST exist before dispatch. At
 // dispatch time `parse_validation.pm` is false (PM has not validated yet); it is
 // rewritten true after the PM parse + id cross-check succeeds, before run-report.
-const finalChangedFiles = (await runGitText("status --porcelain"))
-  .split("\n")
-  .filter((line) => line.trim().length > 0)
-  .map((line) => {
-    const entry = line.slice(3).trim();
-    // Renames/copies render as "old -> new"; record the new path.
-    const arrow = entry.indexOf(" -> ");
-    return arrow >= 0 ? entry.slice(arrow + 4).trim() : entry;
-  })
-  .filter((p) => p.length > 0);
-const branchName = await runGitText("rev-parse --abbrev-ref HEAD");
-const aheadOfBase = await runGitInt(`rev-list --count ${checkpointBase}..HEAD`);
+// One snapshot WITH --base yields the four handoff facts in one read-only Core
+// call: changed_files (guard-parsed: renames/untracked handled), branch, head
+// (checkpointHead, captured below), and ahead_of_base (the base..HEAD count).
+const handoffSnapshot = await repoSnapshot(checkpointBase);
+const finalChangedFiles = handoffSnapshot.changed_files;
+const branchName = handoffSnapshot.branch;
+const aheadOfBase = handoffSnapshot.ahead_of_base;
 
 function buildFacts(pmValidatedFlag) {
   return {
@@ -611,7 +615,7 @@ const runResult = passGate ? "PASS" : "ESCALATE";
 // run-report writer consumes the post-validation truth.
 await writeForgeFile("orchestrator-facts.json", buildFacts(pmValidated));
 
-const checkpointHead = await runGitText("rev-parse HEAD");
+const checkpointHead = handoffSnapshot.head;
 
 // Core writes the run-report (exit-signal). The gate is sourced by Core from the
 // active-ticket; agent_output_source.* = workflow_core_runner because the
