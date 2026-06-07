@@ -743,6 +743,78 @@ describe("runCli active-ticket (deterministic forge-active-ticket/v1 emitter)", 
     const { io } = fakeIo();
     expect(runCli(["active-ticket"], io)).toBe(2);
   });
+
+  test("--out writes byte-exact valid JSON to the path (Core-owned fs write), exit 0", () => {
+    const { io, out } = fakeIo();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-active-ticket-out-"));
+    cliTempDirs.push(dir);
+    const outFile = path.join(dir, "nested", "active-ticket.json");
+
+    const code = runCli(["active-ticket", sandboxEpicPath, "--json", "--out", outFile], io);
+
+    expect(code).toBe(0);
+    // File exists, parent dirs were created, and the bytes parse + validate.
+    const written = fs.readFileSync(outFile, "utf8");
+    const parsed = JSON.parse(written) as { schema: string };
+    expect(parsed.schema).toBe("forge-active-ticket/v1");
+    expect(ActiveTicketSchema.safeParse(parsed).success).toBe(true);
+    // With --out the route writes (it does not also print the object).
+    expect(out.join("\n")).not.toContain("forge-active-ticket/v1");
+  });
+
+  test("--out writes byte-identical content to stdout mode (no corruption), round-tripping repo_root", () => {
+    const winRepoRoot = "C:\\Users\\dev\\repo";
+
+    // stdout mode (no --out): the JSON Core prints.
+    const { io: printIo, out: printOut } = fakeIo();
+    expect(runCli(["active-ticket", sandboxEpicPath, "--repo-root", winRepoRoot, "--json"], printIo)).toBe(0);
+    const printed = printOut.join("\n");
+
+    // --out mode: Core writes the same JSON to a file via its own fs.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-active-ticket-out-"));
+    cliTempDirs.push(dir);
+    const outFile = path.join(dir, "active-ticket.json");
+    const { io: writeIo } = fakeIo();
+    expect(runCli(["active-ticket", sandboxEpicPath, "--repo-root", winRepoRoot, "--out", outFile], writeIo)).toBe(0);
+    const written = fs.readFileSync(outFile, "utf8");
+
+    // The --out file is byte-identical to the stdout JSON — the Core fs write
+    // introduces no corruption (the exact invariant the agent prose byte-write
+    // broke on Windows-path backslashes). Platform-independent: it asserts the
+    // write path matches the print path, not an OS-specific path.resolve result.
+    expect(written).toBe(printed);
+    // Both parse, and their repo_root values round-trip identically.
+    expect((JSON.parse(written) as { repo_root: string }).repo_root).toBe(
+      (JSON.parse(printed) as { repo_root: string }).repo_root,
+    );
+  });
+
+  test("without --out, behavior is unchanged: prints JSON and writes no file", () => {
+    const { io, out } = fakeIo();
+    const code = runCli(["active-ticket", sandboxEpicPath], io);
+
+    expect(code).toBe(0);
+    expect(JSON.parse(out.join("\n")).schema).toBe("forge-active-ticket/v1");
+  });
+
+  test("--out on a blocked/no-ready-ticket selection writes no file and fails (exit 1)", () => {
+    const { io, out } = fakeIo();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-active-ticket-out-"));
+    cliTempDirs.push(dir);
+    const outFile = path.join(dir, "active-ticket.json");
+
+    const code = runCli(["active-ticket", invalidTicketPath, "--out", outFile], io);
+
+    expect(code).toBe(1);
+    expect(JSON.parse(out.join("\n")).ok).toBe(false);
+    expect(fs.existsSync(outFile)).toBe(false);
+  });
+
+  test("--out is listed in USAGE", () => {
+    const { io, err } = fakeIo();
+    runCli(["active-ticket"], io);
+    expect(err.join("\n")).toMatch(/active-ticket[^\n]*--out/);
+  });
 });
 
 describe("runCli --repo-root (target-repo separation)", () => {

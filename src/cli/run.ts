@@ -66,7 +66,7 @@ const USAGE =
   "       forge repo snapshot --repo-root <path> [--base <sha>]\n" +
   "       forge parse-agent <role> (--file <path> | --stdin | --json-file <path> | --json-stdin) [--expected-decision-id <D-NNN> (pm only)]\n" +
   "       forge agent-schema <role>\n" +
-  "       forge active-ticket <epic-path> [--json] [--repo-root <path>]\n" +
+  "       forge active-ticket <epic-path> [--json] [--repo-root <path>] [--out <path>]\n" +
   "       forge guard paths [--active <active-ticket.json>] [--json] [--repo-root <path>]\n" +
   "       forge run-report write <epic-path> --repo-root <p> --result PASS|ESCALATE --ticket-title <s> --checkpoint-base <sha> --checkpoint-head <sha> --guard-result <s> --guard-exit <n> --gate-declared <g> --gate-effective <g> --gate-human-required <true|false> [--engineer-output <p>] [--semantic-output <p>] [--scope-output <p>] [--pm-output <p>] [--facts <p>] [--active-ticket <p>] [--out <p>] [--proposed-status-transition <s>] [--suggested-commit-message <s>] [--suggested-command <s>] [--note <s>]\n" +
   "       forge verify-install";
@@ -258,14 +258,35 @@ export function runCli(argv: string[], io: CliIo, options: RunCliOptions = {}): 
 
   if (command === "active-ticket") {
     if (!isUsablePath(epicPath)) return usageError(io);
-    const unknown = flags.filter((flag) => flag.startsWith("--") && flag !== "--json" && flag !== "--repo-root");
+    const unknown = flags.filter(
+      (flag) => flag.startsWith("--") && flag !== "--json" && flag !== "--repo-root" && flag !== "--out",
+    );
     if (unknown.length > 0) return usageError(io, `unknown option(s): ${unknown.join(", ")}`);
     const result = emitActiveTicket(epicPath, flagValue(flags, "--repo-root") ?? process.cwd());
     if (!result.ok) {
       io.print(JSON.stringify({ ok: false, blockedReasons: result.blockedReasons }, null, 2));
       return 1;
     }
-    io.print(JSON.stringify(result.activeTicket, null, 2));
+    const json = JSON.stringify(result.activeTicket, null, 2);
+    // `--out <path>`: Core writes the forge-active-ticket/v1 JSON to disk
+    // byte-exact via its own fs (creating parent dirs). This is the Core-owned
+    // write the workflow uses instead of handing JSON bytes to an agent to
+    // "write exact bytes" — agent round-tripping corrupts Windows-path
+    // backslashes in `repo_root` → invalid JSON. A no-ready-ticket selection
+    // fails above before this point, so no file is written on that path.
+    const out = flagValue(flags, "--out");
+    if (out !== undefined) {
+      try {
+        fs.mkdirSync(path.dirname(out), { recursive: true });
+        fs.writeFileSync(out, json, "utf8");
+      } catch (thrown) {
+        const message = thrown instanceof Error ? thrown.message : String(thrown);
+        io.printError(`failed to write active-ticket to ${out}: ${message}`);
+        return 1;
+      }
+      return 0;
+    }
+    io.print(json);
     return 0;
   }
 
