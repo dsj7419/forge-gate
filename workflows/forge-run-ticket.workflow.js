@@ -55,6 +55,13 @@ const ARGS = (typeof args === "string")
 const repoRoot = ARGS.repoRoot;
 const epic = ARGS.epic;
 const forgeBin = ARGS.forgeBin ?? "forge";
+// Run identity is the cross-run lock's ownership key. The workflow runtime forbids
+// nondeterministic primitives (Math.random / Date.now / new Date() throw), so the
+// workflow cannot mint a UUID inline. Both are launcher-provided via `args` and
+// REQUIRED (PM-ratified: no in-workflow or bridge minting), exactly like repoRoot
+// / epic / forgeBin above.
+const runId = ARGS.runId;
+const sessionId = ARGS.sessionId;
 
 if (typeof repoRoot !== "string" || repoRoot.length === 0) {
   throw new Error("forge-run-ticket workflow: args.repoRoot (absolute TARGET_REPO path) is required");
@@ -62,10 +69,25 @@ if (typeof repoRoot !== "string" || repoRoot.length === 0) {
 if (typeof epic !== "string" || epic.length === 0) {
   throw new Error("forge-run-ticket workflow: args.epic (absolute target epic path) is required");
 }
+if (typeof runId !== "string" || runId.length === 0) {
+  throw new Error("forge-run-ticket workflow: args.runId (launcher-provided lock ownership key) is required");
+}
+if (typeof sessionId !== "string" || sessionId.length === 0) {
+  throw new Error("forge-run-ticket workflow: args.sessionId (launcher-provided session id) is required");
+}
 
 // The `.forge/` runtime dir for this epic. All workflow-owned structured
 // outputs are persisted here by the core-runner and read back by Core.
 const forgeDir = `${epic.replace(/[\\/]+$/, "")}/.forge`;
+
+// Cross-run lock ownership flag. Set true ONLY after a successful atomic
+// `forge lock acquire`. Every terminal `escalate()` and the PASS path consult
+// this before an owner-checked `forge lock release`: pre-acquire escalations
+// (validate / dry-run / dirty-tree) never release because nothing was acquired.
+// The lock is held for the WHOLE run (across the correction loop) and released
+// only on a terminal outcome. The workflow never breaks, clears, or takes over a
+// lock it does not own — there is no recovery/override path here by design.
+let acquired = false;
 
 // --- CoreRunnerResult schema (local; workflow-defined) ---------------------
 // The ONLY schema passed to the `forge-core-runner` bridge. Local is sufficient
@@ -254,25 +276,51 @@ log(`preflight: validating epic ${epic} in repo ${repoRoot}`);
 // validate / run --dry-run take the epic positionally and REJECT --repo-root.
 const validation = await runCoreJson(`${forgeBin} validate "${epic}" --json`);
 if (validation.ok !== true) {
-  return escalate("PREFLIGHT_VALIDATE_FAILED", { validation });
+  return await escalate("PREFLIGHT_VALIDATE_FAILED", { validation });
 }
 
 const dryRun = await runCoreJson(`${forgeBin} run "${epic}" --dry-run --json`);
 if (dryRun.ok !== true) {
-  return escalate("PREFLIGHT_DRY_RUN_FAILED", { dryRun });
+  return await escalate("PREFLIGHT_DRY_RUN_FAILED", { dryRun });
 }
 
-// Clean-tree + lock-absence preconditions (read-only git + a file existence
-// probe routed through the core-runner). Branch creation is the launcher's job.
+// Clean-tree precondition (read-only git through the core-runner). Branch
+// creation is the launcher's job; the workflow is already on the run branch.
 const treeStatus = await runGitText("status --porcelain");
 if (treeStatus.length !== 0) {
-  return escalate("PREFLIGHT_DIRTY_TREE", { treeStatus });
+  return await escalate("PREFLIGHT_DIRTY_TREE", { treeStatus });
 }
-const lockProbe = await runCore(
-  `test -f "${forgeDir}/lock.json" && echo present || echo absent`,
+
+// Atomic cross-run lock acquire — the create IS the mutual exclusion. This
+// REPLACES the old non-atomic `test -f lock.json` existence probe (the same
+// check-then-act TOCTOU the command path retired). It runs AFTER the clean-tree
+// check and BEFORE checkpoint capture and active-ticket emission, so no mutation
+// happens until the run provably owns the lock. Ticket id is sourced from the
+// dry-run selection and the branch from `git rev-parse --abbrev-ref HEAD`, both
+// before active-ticket emission (which is NOT reordered ahead of acquire).
+const acquireTicketId = String(dryRun.selected?.ticket ?? "");
+const acquireBranch = await runGitText("rev-parse --abbrev-ref HEAD");
+const lockAcquire = await runCoreJsonResult(
+  [
+    `${forgeBin} lock acquire "${epic}"`,
+    `--run-id "${runId}"`,
+    `--session-id "${sessionId}"`,
+    `--ticket "${acquireTicketId}"`,
+    `--branch "${acquireBranch}"`,
+    `--repo-root "${repoRoot}"`,
+  ].join(" "),
 );
-if (lockProbe.stdout.trim() === "present") {
-  return escalate("PREFLIGHT_LOCK_EXISTS", { lock: `${forgeDir}/lock.json` });
+if (lockAcquire.exit === 0 && lockAcquire.json.ok === true) {
+  acquired = true;
+} else if (lockAcquire.json.code === "LOCK_HELD") {
+  // Another run already owns the epic — stop before any mutation; report the holder.
+  return await escalate("PREFLIGHT_LOCK_HELD", { holder: lockAcquire.json.holder });
+} else if (lockAcquire.json.code === "LOCK_MALFORMED") {
+  // The on-disk lock is unparseable — human investigation; NEVER clobber/auto-clear.
+  return await escalate("PREFLIGHT_LOCK_MALFORMED", { errors: lockAcquire.json.errors });
+} else {
+  // Any other non-zero / undecidable acquire result — fail closed before mutation.
+  return await escalate("PREFLIGHT_LOCK_ACQUIRE_FAILED", { acquire: lockAcquire.json });
 }
 
 // Checkpoint base for the run-report (read-only).
@@ -342,7 +390,7 @@ while (attempt < MAX_ATTEMPTS && loopVerdict === "CORRECT") {
   // Persist + Core-validate the structured engineer output.
   engineerParsed = await persistAndValidateRole("engineer", "engineer-output.json", engineerOutput);
   if (engineerParsed.exit !== 0 || engineerParsed.json.ok !== true) {
-    return escalate("ENGINEER_OUTPUT_INVALID", { engineerParsed });
+    return await escalate("ENGINEER_OUTPUT_INVALID", { engineerParsed });
   }
 
   // -------------------------------------------------------------------------
@@ -354,7 +402,7 @@ while (attempt < MAX_ATTEMPTS && loopVerdict === "CORRECT") {
   // missing field is a Core-contract break, so escalate rather than invent
   // verification that flows into the run-report's trust boundary.
   if (!Array.isArray(dryRun.verifyCommands)) {
-    return escalate("VERIFY_COMMANDS_MISSING", { dryRun });
+    return await escalate("VERIFY_COMMANDS_MISSING", { dryRun });
   }
   const verifyCommands = dryRun.verifyCommands;
   verifyResults = [];
@@ -389,11 +437,11 @@ while (attempt < MAX_ATTEMPTS && loopVerdict === "CORRECT") {
     semanticOutput,
   );
   if (semanticParsed.exit !== 0 || semanticParsed.json.ok !== true) {
-    return escalate("SEMANTIC_OUTPUT_INVALID", { semanticParsed });
+    return await escalate("SEMANTIC_OUTPUT_INVALID", { semanticParsed });
   }
   scopeParsed = await persistAndValidateRole("scope-verifier", "scope-verifier-output.json", scopeOutput);
   if (scopeParsed.exit !== 0 || scopeParsed.json.ok !== true) {
-    return escalate("SCOPE_OUTPUT_INVALID", { scopeParsed });
+    return await escalate("SCOPE_OUTPUT_INVALID", { scopeParsed });
   }
 
   // Verifier verdicts come ONLY from Core-validated data (parse-agent .json.data),
@@ -408,7 +456,7 @@ while (attempt < MAX_ATTEMPTS && loopVerdict === "CORRECT") {
     loopVerdict = "CORRECT";
     priorCorrections = collectCorrections({ verifyResults, guard, semanticParsed, scopeParsed });
     if (attempt >= MAX_ATTEMPTS) {
-      return escalate("CORRECTION_CAP_REACHED", {
+      return await escalate("CORRECTION_CAP_REACHED", {
         attempt,
         verifyResults,
         guardOk,
@@ -499,7 +547,7 @@ const pmDispatch = await runCoreJsonResult(
   ].join(" "),
 );
 if (pmDispatch.exit !== 0 || pmDispatch.json.ok === false) {
-  return escalate("PM_DISPATCH_FAILED", { pmDispatch });
+  return await escalate("PM_DISPATCH_FAILED", { pmDispatch });
 }
 
 // Dispatch the PM agent itself with its Core-RENDERED packet — the prompt from
@@ -517,7 +565,7 @@ const pmOutput = await agent(
 const pmParsed = await persistAndValidateRole("pm", "pm-output.json", pmOutput, expectedDecisionId);
 const pmValidated = pmParsed.exit === 0 && pmParsed.json.ok === true;
 if (!pmValidated) {
-  return escalate("PM_OUTPUT_INVALID", { pmParsed });
+  return await escalate("PM_OUTPUT_INVALID", { pmParsed });
 }
 const pmVerdict = pmParsed.json.data.decision;
 
@@ -538,7 +586,7 @@ if (pmVerdict === "PASS") {
   );
   ledgerAppendOk = ledgerAppend.exit === 0 && ledgerAppend.json.ok === true;
   if (!ledgerAppendOk) {
-    return escalate("LEDGER_APPEND_FAILED", { ledgerAppend });
+    return await escalate("LEDGER_APPEND_FAILED", { ledgerAppend });
   }
 }
 
@@ -592,12 +640,17 @@ const runReportWritten = await runCoreOk(
   ].join(" "),
 );
 if (!runReportWritten) {
-  return escalate("RUN_REPORT_WRITE_FAILED", { runResult });
+  return await escalate("RUN_REPORT_WRITE_FAILED", { runResult });
 }
 
 // Read the Core-owned run-report back from the file (success path) and return it
 // as the workflow's single answer. No outward action is taken — the human acts.
 const runReport = await runCoreJson(`cat "${forgeDir}/run-report.json"`);
+
+// Owner-checked terminal release on the PASS/handoff path — AFTER the ledger
+// append and run-report write. A LOCK_FOREIGN / LOCK_ABSENT / LOCK_MALFORMED
+// result is surfaced in the handoff (`lock_release`), NEVER overridden/cleared.
+const lockReleaseResult = await releaseLockIfOwned();
 
 log(`commit-gate handoff: result=${runResult} decision=${pmVerdict} decision_id=${expectedDecisionId}`);
 
@@ -607,6 +660,7 @@ return {
   decision_id: expectedDecisionId,
   ledger_append_ok: ledgerAppendOk,
   run_report: runReport,
+  lock_release: lockReleaseResult,
   // Explicitly: the workflow performs NO outward action. The human reviews this
   // report and performs any commit / push / PR / merge manually.
   outward_action_taken: false,
@@ -636,13 +690,40 @@ function collectCorrections({ verifyResults, guard, semanticParsed, scopeParsed 
   return corrections;
 }
 
-/** Terminate the run with an ESCALATE handoff. No outward action. */
-function escalate(code, evidence) {
+/**
+ * Owner-checked terminal lock release. Releases the cross-run lock IFF this run
+ * acquired it (`acquired === true`), keyed by `runId`. Pre-acquire escalations
+ * (validate / dry-run / dirty-tree / a failed acquire itself) never release
+ * because nothing was acquired. A LOCK_FOREIGN / LOCK_ABSENT / LOCK_MALFORMED
+ * result is RETURNED for surfacing in the handoff/evidence — never overridden,
+ * never cleared, never taken over. Returns `null` when this run holds no lock.
+ */
+async function releaseLockIfOwned() {
+  if (acquired !== true) return null;
+  const release = await runCoreJsonResult(
+    `${forgeBin} lock release "${epic}" --run-id "${runId}"`,
+  );
+  // Once a terminal release is attempted, the run no longer claims ownership —
+  // do not retry or double-release on a subsequent terminal path.
+  acquired = false;
+  return { exit: release.exit, ...release.json };
+}
+
+/**
+ * Terminate the run with an ESCALATE handoff. No outward action. Owner-aware:
+ * releases the cross-run lock iff this run acquired it (the run provably owns it
+ * via `runId`, and escalate is terminal). The release result, when any, is
+ * surfaced in the evidence — a foreign/absent/malformed release is reported,
+ * never overridden/cleared. The ESCALATE shape is otherwise unchanged (no evidence
+ * run-report is written on this path).
+ */
+async function escalate(code, evidence) {
   log(`ESCALATE: ${code}`);
+  const lockRelease = await releaseLockIfOwned();
   return {
     result: "ESCALATE",
     code,
-    evidence,
+    evidence: lockRelease === null ? evidence : { ...evidence, lock_release: lockRelease },
     outward_action_taken: false,
   };
 }
