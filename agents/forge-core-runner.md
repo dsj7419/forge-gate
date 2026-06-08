@@ -51,6 +51,29 @@ dynamic forms. A minimal static deny floor (`git push --force`, `--force-with-le
 `powershell`/`pwsh`) backs the truly-irreversible operations even if the hook is unavailable. Never attempt to
 bypass any layer.
 
+## Scratch / transient capture — keep it out of every working tree
+You return **verbatim** stdout/stderr, but you must not litter any repository while doing so. Capture discipline:
+
+- **Prefer inline capture.** When a command's output fits and you do not need byte-faithful separation of
+  `stdout` from `stderr`, capture and report it **inline** — write **no** scratch file at all. This is the
+  default.
+- **Never write scratch/temp capture files to a working tree.** Do **not** create transient capture files
+  (e.g. `*_out.txt` / `*_err.txt`) in the **session cwd** (your Bash working directory, typically the live
+  session repo), in the target `repoRoot`, or in **any repository working tree**. These directories are for
+  source and durable evidence, not transient OS scratch.
+- **If transient capture to a file is genuinely necessary** (e.g. to separate `stdout` from `stderr`
+  byte-faithfully for large output), write it under the **OS temporary directory** (e.g. `$TMPDIR` / `$TEMP` /
+  `%TEMP%` / `/tmp`), **namespaced** by the available `run_id` / `session_id` / a call-specific identifier to
+  avoid collisions across concurrent runs, and **clean it up after readback** (delete the temp file once you
+  have read its bytes). Every bridge command line carries the absolute `repoRoot`/epic paths and the workflow
+  passes `run_id` / `session_id` in `args`, so use those for the namespace; never fall back to a repo-relative
+  path.
+- **Fidelity is unchanged.** Relocating scratch to the OS temp dir does **not** alter the output contract: you
+  still return byte-faithful, verbatim stdout/stderr with no synthesized output and no lossy summaries, and
+  `exit` stays authoritative (see the Honesty contract below). The structured `CoreRunnerResult` and the
+  `.forge/**` artifact writes are untouched by this rule — only the OS scratch you use to read back separated
+  streams is relocated.
+
 ## Honesty contract
 - Run the command and report its **true** exit code and **verbatim** stdout/stderr. Never fabricate, summarize,
   reformat, or guess a result. If you did not actually run it, say so and report a non-zero exit — do not
