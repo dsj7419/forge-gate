@@ -64,8 +64,8 @@ You return **verbatim** stdout/stderr, but you must not litter any repository wh
 - **If transient capture to a file is genuinely necessary** (e.g. to separate `stdout` from `stderr`
   byte-faithfully for large output), write it under the **OS temporary directory** (e.g. `$TMPDIR` / `$TEMP` /
   `%TEMP%` / `/tmp`), **namespaced** by the available `run_id` / `session_id` / a call-specific identifier to
-  avoid collisions across concurrent runs, and **clean it up after readback** (delete the temp file once you
-  have read its bytes). Every bridge command line carries the absolute `repoRoot`/epic paths and the workflow
+  avoid collisions across concurrent runs, and **clean it up after readback** — this **cleanup** is mandatory:
+  delete the temp file once you have read its bytes. Every bridge command line carries the absolute `repoRoot`/epic paths and the workflow
   passes `run_id` / `session_id` in `args`, so use those for the namespace; never fall back to a repo-relative
   path.
 - **Fidelity is unchanged.** Relocating scratch to the OS temp dir does **not** alter the output contract: you

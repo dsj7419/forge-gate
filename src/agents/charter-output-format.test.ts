@@ -141,8 +141,10 @@ describe("core-runner charter — scratch-capture scoping rules", () => {
     // Namespaced by the available run/session/call identifier.
     expect(lower).toContain("run_id");
     expect(lower).toContain("session_id");
-    // Cleanup after readback is mandatory.
-    expect(lower).toContain("clean");
+    // Cleanup after readback is mandatory. Lock the precise "cleanup" term and
+    // "readback" — NOT the broad "clean" token, which also matches "no git clean"
+    // in the L3 deny section and would not protect this rule.
+    expect(lower).toContain("cleanup");
     expect(lower).toContain("readback");
   });
 
@@ -151,9 +153,17 @@ describe("core-runner charter — scratch-capture scoping rules", () => {
     expect(lower).toContain("inline");
   });
 
-  test("preserves the verbatim-fidelity output contract (no synthesized output, exit authoritative)", () => {
+  test("preserves the verbatim-fidelity output contract (no synthesized output, no lossy summaries, exit authoritative)", () => {
     const lower = readCoreRunner().toLowerCase();
+    // The full fidelity contract — each load-bearing concept locked by its own token,
+    // so a future edit cannot quietly drop any one of them.
     expect(lower).toContain("verbatim");
+    expect(lower).toContain("stdout");
+    expect(lower).toContain("stderr");
+    // No synthesized output / no lossy summaries are part of the core fidelity contract.
+    expect(lower).toContain("synthesized");
+    expect(lower).toContain("lossy");
+    // No fabrication; exit code stays the authoritative signal.
     expect(lower).toContain("never fabricate");
     expect(lower).toContain("authoritative");
   });
