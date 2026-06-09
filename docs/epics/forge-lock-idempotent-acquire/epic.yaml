@@ -1,0 +1,8 @@
+schema_version: 1
+id: forge-lock-idempotent-acquire
+title: Make forge lock acquire idempotent for the same owner
+sprints:
+  - sprint-01-idempotent-acquire
+gate_policy:
+  default_push: human
+  default_merge: human
