@@ -192,6 +192,15 @@ export function acquireLock(file: string, record: LockRecord, io: LockIo): Acqui
       errors: ["exclusive create reported a collision but no lock file is present"],
     };
   }
+  // Idempotent same-owner re-acquire: a run UUID is unique to one run, so an
+  // on-disk holder with the requested `run_id` is provably this same run already
+  // owning the lock (e.g. a subagent that executed the acquire twice in one
+  // dispatch). Return the existing record as-is — no second write, the on-disk
+  // content is unchanged. Mutual exclusion is preserved: a *different* run_id is
+  // still a foreign holder below.
+  if (existing.record.run_id === proposed.data.run_id) {
+    return { ok: true, record: existing.record };
+  }
   return { ok: false, code: "LOCK_HELD", holder: existing.record };
 }
 
