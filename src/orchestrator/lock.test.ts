@@ -191,6 +191,70 @@ describe("acquireLock — atomic exclusive create", () => {
   });
 });
 
+describe("acquireLock — idempotent same-owner re-acquire (T01, AC8)", () => {
+  test("AC8a: a first acquire by run_id X on a free path succeeds", () => {
+    const { io, creates } = makeIo();
+    const result = acquireLock(LOCK, record({ run_id: "run-X" }), io);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.record.run_id).toBe("run-X");
+    expect(creates).toEqual([LOCK]);
+  });
+
+  test("AC8b: a second acquire by the same run_id X succeeds (idempotent), not LOCK_HELD", () => {
+    const { io } = makeIo({ [LOCK]: serializeLock(record({ run_id: "run-X" })) });
+    const result = acquireLock(LOCK, record({ run_id: "run-X" }), io);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.record.run_id).toBe("run-X");
+  });
+
+  test("AC8c: the same-owner re-acquire returns the existing on-disk record, not the proposed one", () => {
+    // Holder and re-acquire share run_id but differ in diagnostic fields, so a returned
+    // holder value proves the existing record was read back (not the proposed one).
+    const held = record({
+      run_id: "run-X",
+      session_id: "session-original",
+      pid: 4321,
+      heartbeat_ts: "2026-06-03T00:00:00.000Z",
+    });
+    const { io } = makeIo({ [LOCK]: serializeLock(held) });
+    const result = acquireLock(
+      LOCK,
+      record({ run_id: "run-X", session_id: "session-different", pid: 9999, heartbeat_ts: "2026-06-03T12:00:00.000Z" }),
+      io,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.record.session_id).toBe("session-original");
+    expect(result.record.pid).toBe(4321);
+    expect(result.record.heartbeat_ts).toBe("2026-06-03T00:00:00.000Z");
+  });
+
+  test("AC8d: the idempotent same-owner acquire does not overwrite the on-disk lock and writes nothing", () => {
+    const held = record({ run_id: "run-X", session_id: "session-original" });
+    const { io, state, creates } = makeIo({ [LOCK]: serializeLock(held) });
+    const before = state[LOCK];
+    const result = acquireLock(LOCK, record({ run_id: "run-X", session_id: "session-different" }), io);
+    expect(result.ok).toBe(true);
+    // No new create recorded; the on-disk bytes are unchanged.
+    expect(creates).toEqual([]);
+    expect(state[LOCK]).toBe(before);
+  });
+
+  test("AC8e: a different run_id collision still returns LOCK_HELD with the holder (mutual exclusion preserved)", () => {
+    const { io, state } = makeIo({ [LOCK]: serializeLock(record({ run_id: "run-X" })) });
+    const before = state[LOCK];
+    const result = acquireLock(LOCK, record({ run_id: "run-Y" }), io);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("LOCK_HELD");
+    if (result.code !== "LOCK_HELD") return;
+    expect(result.holder.run_id).toBe("run-X");
+    expect(state[LOCK]).toBe(before);
+  });
+});
+
 describe("readLock — inspect", () => {
   test("a missing lock reads as record:null (ok)", () => {
     const { io } = makeIo();
