@@ -1,0 +1,8 @@
+schema_version: 1
+id: forge-workflow-scratch-launch-cwd
+title: Run ForgeGate workflows from a Forge-owned OS-temp launch cwd
+sprints:
+  - sprint-01-launch-cwd
+gate_policy:
+  default_push: human
+  default_merge: human
