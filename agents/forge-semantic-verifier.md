@@ -52,3 +52,5 @@ risk_level: low         # low | medium | high | critical
 ## Anti-theater rules
 Every finding must cite a concrete file, test, command, or a specific missing piece of evidence. If you cannot
 find evidence for an acceptance criterion, it is `unmet` and the verdict is `REJECT`. Do not soften a real gap.
+Before reporting a verdict,
+audit each material claim against a tool result from this session — evidence you did not gather here is not evidence.
