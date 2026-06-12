@@ -66,6 +66,14 @@ const forgeBin = ARGS.forgeBin ?? "forge";
 // / epic / forgeBin above.
 const runId = ARGS.runId;
 const sessionId = ARGS.sessionId;
+// The launcher-declared Forge-owned OS-temp scratch launch cwd (the strict
+// expectation `scripts/launch-workflow.mjs prepare` emits into `args`). Same
+// launcher-provided pattern as runId/sessionId above — the workflow never mints
+// or infers it — but its absence fails closed through the typed
+// launch-cwd-gate escalation in preflight (the standard ESCALATE shape with
+// outward_action_taken: false), because an unverifiable launch is an unsafe
+// launch.
+const scratchCwd = ARGS.scratchCwd;
 
 if (typeof repoRoot !== "string" || repoRoot.length === 0) {
   throw new Error("forge-run-ticket workflow: args.repoRoot (absolute TARGET_REPO path) is required");
@@ -221,6 +229,78 @@ async function writeForgeFile(relName, obj) {
   return target;
 }
 
+/**
+ * probeLaunchCwd — the pre-mutation launch-environment probe behind the
+ * fail-closed launch-cwd gate. Dispatches the typed forge-core-runner bridge
+ * WITHOUT the cd-to-repoRoot preamble `runCore` uses: the entire point is to
+ * observe the directory the harness anchored this subagent's process to (= the
+ * Claude session launch cwd — the place the harness output-capture wrapper
+ * drops its TEMP* scratch). The probe command is a bare `node -e` — non-git,
+ * so it is hook-safe — and emits the realpath'd process cwd plus the
+ * realpath'd OS temp root as one JSON object on stdout.
+ */
+async function probeLaunchCwd() {
+  return await agent(
+    [
+      "Run EXACTLY this one command from the directory your shell session starts in.",
+      "Do NOT cd anywhere first — the command exists to observe your process working",
+      "directory exactly as launched; changing directory would destroy the observation.",
+      "Do not edit files, do not run any other command, do not perform any outward action.",
+      "",
+      "command: node -e \"const f=require('fs');const o=require('os');process.stdout.write(JSON.stringify({cwd:f.realpathSync(process.cwd()),tmpdir:f.realpathSync(o.tmpdir())}))\"",
+      "",
+      "Return the CoreRunnerResult object: ok (exit===0), exit (the process exit code),",
+      "stdout (verbatim), stderr (verbatim, empty when none), command (the command you ran).",
+      "Report the command's true exit code and stdout verbatim — never fabricate either.",
+    ].join("\n"),
+    { agentType: "forge-core-runner", schema: CoreRunnerResult },
+  );
+}
+
+// --- launch-cwd gate helpers (pure; extracted and EXECUTED by the protocol test) ---
+
+/**
+ * normalizeLaunchPath — Windows-aware path normalization for the launch-cwd
+ * comparison: backslashes become forward slashes, trailing separators are
+ * stripped, and the result is case-folded (Windows paths are case-insensitive;
+ * the launcher emits realpath'd absolute paths).
+ */
+function normalizeLaunchPath(p) {
+  return String(p).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+/**
+ * evaluateLaunchCwd — the pure launch-cwd safety decision. `observed` is the
+ * probe result ({ cwd, tmpdir }); `expectation` carries the launcher-declared
+ * scratch cwd plus the target repoRoot. The launch is safe IFF the observed
+ * cwd (a) equals the declared scratch cwd, (b) lies STRICTLY under the OS temp
+ * root (the temp root itself is not a per-run Forge-owned scratch dir), and
+ * (c) is not inside the target repoRoot. Every comparison is normalized
+ * (separator + case), so Windows backslash/case variants compare equal.
+ */
+function evaluateLaunchCwd(observed, expectation) {
+  const observedCwd = normalizeLaunchPath(observed.cwd);
+  const expectedScratch = normalizeLaunchPath(expectation.scratchCwd);
+  const tempRoot = normalizeLaunchPath(observed.tmpdir);
+  const targetRoot = normalizeLaunchPath(expectation.repoRoot);
+  const checks = {
+    matches_expectation: observedCwd.length > 0 && observedCwd === expectedScratch,
+    under_os_temp_root: tempRoot.length > 0 && observedCwd.startsWith(`${tempRoot}/`),
+    outside_target_repo:
+      observedCwd !== targetRoot && !observedCwd.startsWith(`${targetRoot}/`),
+  };
+  return {
+    safe: checks.matches_expectation && checks.under_os_temp_root && checks.outside_target_repo,
+    checks,
+    observed_cwd: observedCwd,
+    expected_scratch_cwd: expectedScratch,
+    os_temp_root: tempRoot,
+    target_repo_root: targetRoot,
+  };
+}
+
+// --- end launch-cwd gate helpers ---
+
 // --- Helpers ---------------------------------------------------------------
 
 /** Parse the forge role JSON-Schema text into a real object for agent({schema}). */
@@ -275,6 +355,53 @@ function deriveNextDecisionId(ledgerDecisions) {
 // Phase 1 — Preflight (via core-runner only).
 // ===========================================================================
 await phase("preflight");
+
+// --- Fail-closed launch-cwd gate (strict; PM-ratified) -----------------------
+// Runs FIRST — before checkpoint capture, before the atomic lock acquire,
+// before branch use, before active-ticket emission, before any mutation. The
+// harness Bash output-capture wrapper writes TEMP*_out/_err scratch into the
+// subagent process cwd (= the Claude session launch cwd), below charter and
+// workflow command-shape control; the live-proven prevention is launching the
+// session from a Forge-owned OS-temp scratch cwd. This gate makes that
+// contract enforceable: an unsafe (or unverifiable) launch escalates the
+// dedicated typed code PREFLIGHT_LAUNCH_CWD_UNSAFE with
+// outward_action_taken: false and touches NOTHING — no lock acquire, no
+// active-ticket write, no branch use, no ledger append, no run-report write,
+// no target-source edits. Enforcement is strict, not optional-when-provided:
+// args.scratchCwd is required, so a launch without the expectation fails
+// closed through the same code.
+if (typeof scratchCwd !== "string" || scratchCwd.length === 0) {
+  return await escalate("PREFLIGHT_LAUNCH_CWD_UNSAFE", {
+    reason:
+      "args.scratchCwd (the launcher-declared Forge-owned OS-temp scratch launch cwd) is required — launch refused before any mutation; run scripts/launch-workflow.mjs prepare and pass its emitted workflow args",
+  });
+}
+const launchProbe = await probeLaunchCwd();
+let observedLaunch = null;
+if (launchProbe.exit === 0) {
+  try {
+    observedLaunch = JSON.parse(launchProbe.stdout);
+  } catch {
+    observedLaunch = null;
+  }
+}
+if (
+  observedLaunch === null ||
+  typeof observedLaunch.cwd !== "string" ||
+  typeof observedLaunch.tmpdir !== "string"
+) {
+  // An undecidable probe is treated exactly like an unsafe launch: fail closed.
+  return await escalate("PREFLIGHT_LAUNCH_CWD_UNSAFE", {
+    reason: "launch-cwd probe undecidable — fail closed before any mutation",
+    probe: { exit: launchProbe.exit, stdout: launchProbe.stdout, stderr: launchProbe.stderr ?? "" },
+  });
+}
+const launchCwdVerdict = evaluateLaunchCwd(observedLaunch, { scratchCwd, repoRoot });
+if (launchCwdVerdict.safe !== true) {
+  return await escalate("PREFLIGHT_LAUNCH_CWD_UNSAFE", launchCwdVerdict);
+}
+log(`preflight: launch cwd verified (${launchCwdVerdict.observed_cwd})`);
+
 log(`preflight: validating epic ${epic} in repo ${repoRoot}`);
 
 // validate / run --dry-run take the epic positionally and REJECT --repo-root.

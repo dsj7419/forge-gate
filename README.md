@@ -338,6 +338,69 @@ node dist/cli.js validate <epic-path>       # built binary
 
 ---
 
+## Workflow runs: the OS-temp scratch launch (operator procedure)
+
+The Claude Code harness's Bash output-capture wrapper writes `TEMP*_out` / `TEMP*_err` scratch pairs into the
+**subagent process cwd — the directory the `claude` session was started from** — below charter and workflow
+command-shape control (a charter rule alone was live-proven insufficient). The enforceable, live-proven
+prevention is **launch-cwd placement**: ForgeGate workflow runs are launched from a **Forge-owned scratch
+directory under the OS temp root**, so harness scratch can only ever land somewhere ForgeGate owns and later
+deletes. Starting the session elsewhere and `cd`-ing later is **proven ineffective** — the session cwd is
+immutable mid-session, and Agent/Workflow subagents anchor to the launch cwd.
+
+Two layers make this real:
+
+- **Launcher (operational):** `scripts/launch-workflow.mjs` creates the per-run scratch cwd, mints
+  `runId`/`sessionId`, runs the pre/post `TEMP*` scans, writes gitignored evidence, and cleans up only its own
+  scratch. It never launches Claude and never shells git (repo facts come from `forge repo snapshot` via the
+  CLI resolver).
+- **Workflow gate (enforcement, strict):** `workflows/forge-run-ticket.workflow.js` **requires** the
+  launcher-declared `scratchCwd` expectation in `args` and verifies the observed launch cwd through a non-git
+  bridge probe **before checkpoint, lock acquire, branch use, active-ticket emission, or any mutation**. An
+  unsafe (or unverifiable) launch escalates the dedicated typed code `PREFLIGHT_LAUNCH_CWD_UNSAFE` with
+  `outward_action_taken: false` — no lock is acquired and nothing is written. By design this makes a ForgeGate
+  workflow run launched from inside a repo working tree impossible.
+
+### Procedure
+
+```bash
+# 1. Prepare (from your normal shell, any cwd): creates the per-run scratch dir under the OS temp
+#    root, mints run identity, runs the PRE-run TEMP* scan (session repo + target repo + scratch),
+#    and writes gitignored evidence (the scratch dir + <session-repo>/.forge/launch-evidence/).
+node <forge-checkout>/scripts/launch-workflow.mjs prepare \
+  --session-repo <abs-forge-checkout> --target-repo <abs-target-repo> --epic <abs-epic-path>
+
+# 2. Launch: open a NEW terminal, cd INTO the printed scratch dir, and start `claude` FROM it.
+#    This placement IS the prevention.
+
+# 3. Run: in that session, invoke the Workflow tool on
+#    <forge-checkout>/workflows/forge-run-ticket.workflow.js with EXACTLY the emitted
+#    workflow_args JSON (repoRoot / epic / forgeBin / runId / sessionId / scratchCwd).
+
+# 4. Post-run scan: re-scan the same three locations and record the result in the evidence.
+node <forge-checkout>/scripts/launch-workflow.mjs post-scan --session-repo <abs-forge-checkout> --run-id <runId>
+
+# 5. Cleanup (hygiene only): removes ONLY the Forge-owned scratch dir. The prevention claim is
+#    launch-cwd placement (step 2) — never this removal.
+node <forge-checkout>/scripts/launch-workflow.mjs cleanup --session-repo <abs-forge-checkout> --run-id <runId>
+```
+
+**Windows path behavior.** The scratch dir resolves under `%TEMP%` (e.g.
+`C:\Users\<you>\AppData\Local\Temp\forge-launch-<runId>`); all emitted paths are absolute, `realpath`-resolved,
+and forward-slash normalized; the workflow's launch-cwd comparison is Windows-aware (separator **and** case
+normalization), so `C:\Users\…` and `c:/users/…` compare equal. POSIX temp roots (`$TMPDIR`, `/tmp`) are
+handled the same way.
+
+**Verdict depth.** A run used as a scratch-placement **verdict** must reach the **guard + agent-schema bridge
+stages**; a preflight-only run is **INCONCLUSIVE** (the scratch producer is the agent output-capture wrapper,
+which a preflight-only run barely exercises).
+
+**Hook posture.** A scratch-launched session does **not** load ForgeGate's project-local permissions hook
+(hooks load from the launch directory). Such sessions are restricted to **launch-and-prove actions only**: no
+outward git/gh actions, no source edits — and no outward action of any kind without explicit human approval.
+
+---
+
 ## Agent charters
 
 The Forge roles are Claude Code subagent charters in `agents/` (installed to `~/.claude/agents/`). They declare
