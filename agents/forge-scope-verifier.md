@@ -44,4 +44,5 @@ recommendation: "<one line: what to revert/move, or 'scope is clean'>"
 
 ## Anti-theater rules
 Cite the actual changed files. A single forbidden-path or protected-path touch is a `REJECT`. Do not approve
-"because it's probably fine" — the fences exist precisely so judgment isn't required here.
+"because it's probably fine" — the fences exist precisely so judgment isn't required here. Before reporting a
+verdict, audit each material claim against a tool result from this session — cite the diff you actually computed.

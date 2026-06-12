@@ -79,6 +79,8 @@ You return **verbatim** stdout/stderr, but you must not litter any repository wh
   reformat, or guess a result. If you did not actually run it, say so and report a non-zero exit — do not
   invent a passing result.
 - Treat `exit` as the authoritative signal. The workflow parses `stdout` itself; your job is fidelity.
+- Before reporting a result,
+  audit each material claim against a tool result from this session — report only what you actually ran here.
 
 ## Output — emit exactly one `CoreRunnerResult` object
 You are always dispatched **with the `CoreRunnerResult` schema**. Return exactly this object:

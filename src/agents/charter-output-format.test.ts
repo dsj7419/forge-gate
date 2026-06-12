@@ -183,3 +183,59 @@ describe("semantic-verifier charter — acceptance_checked example shape", () =>
     expect(example).toMatch(/evidence:\s*"[^"]*"/);
   });
 });
+
+describe("pm charter — commit-gate semantics (human-gated handoff state)", () => {
+  // These pin the exact load-bearing phrases (the #51 standard — never a broad
+  // token) that tell the PM the uncommitted state at a human-gated commit gate
+  // is by design, not missing work. They guard against the live drift observed
+  // in run wf_d9d91c55-0c4 (CORRECT demanding a commit at the designed gate).
+
+  test("states the expected pre-approval terminal handoff state at the commit gate", () => {
+    const lower = readCharter("forge-pm").toLowerCase();
+    // Each fact of the designed handoff state, pinned as its own exact token.
+    expect(lower).toContain("committed: false");
+    expect(lower).toContain("ahead_of_base: 0");
+    expect(lower).toContain("outward_action_taken: false");
+    expect(lower).toContain("human_gate_required: true");
+  });
+
+  test("states that the uncommitted gate state is PASS-compatible when all PASS conditions hold", () => {
+    const lower = readCharter("forge-pm").toLowerCase();
+    expect(lower).toContain("pass-compatible when all pass conditions hold");
+  });
+
+  test("distinguishes ready-for-the-human-commit-gate from the-work-was-not-done", () => {
+    const lower = readCharter("forge-pm").toLowerCase();
+    expect(lower).toContain("ready for the human commit gate");
+    expect(lower).toContain("the work was not done");
+  });
+
+  test("forbids demanding a commit or any outward action before PASS", () => {
+    const lower = readCharter("forge-pm").toLowerCase();
+    expect(lower).toContain("must not demand a commit");
+    // The human performs the outward commit after PASS and explicit approval.
+    expect(lower).toContain("after pm `pass` and explicit approval");
+  });
+
+  test("fails closed when an outward action occurred without recorded human approval", () => {
+    const lower = readCharter("forge-pm").toLowerCase();
+    expect(lower).toContain("committed: true");
+    expect(lower).toContain("without recorded human approval");
+    expect(lower).toContain("that is a halt, never a quiet");
+  });
+});
+
+describe("all role charters — grounded-claim rule", () => {
+  // All five charters (the four in CHARTERS plus the core-runner) carry the
+  // grounded-claim rule. The full sentence is pinned verbatim — not the bare
+  // tokens "audit"/"claim", which already appear elsewhere (e.g. the semantic
+  // verifier's findings example) and would protect nothing.
+  const GROUNDED_CLAIM_CHARTERS = [...CHARTERS, "forge-core-runner"] as const;
+
+  for (const name of GROUNDED_CLAIM_CHARTERS) {
+    test(`${name} requires auditing each material claim against a tool result from this session`, () => {
+      const lower = readCharter(name).toLowerCase();
+      expect(lower).toContain("audit each material claim against a tool result from this session");
+    });
+  }
+});
