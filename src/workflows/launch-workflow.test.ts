@@ -28,6 +28,18 @@ const LAUNCHER = path.join(REPO_ROOT, "scripts", "launch-workflow.mjs");
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SHA_RE = /^[0-9a-f]{40}$/;
 
+// The leading byte recorded on every artifact observed in the live runs
+// (U+F03A) — built from its code point so this test source stays ASCII-clean.
+const F03A = String.fromCharCode(0xf03a);
+// The HISTORICAL artifact corpus that motivated this epic (live runs, 2026-06):
+// mid-name `_out_` / `_err_` pairs and the U+F03A-prefixed shape. The scan must
+// detect every observed shape — a scan that misses these reports falsely clean.
+const HISTORICAL_TEMP_ARTIFACTS = [
+  "TEMPfg_out_lp.txt",
+  "TEMPfg_err_lp.txt",
+  `${F03A}TEMPfv_out.txt`,
+];
+
 type LauncherRun = { status: number | null; stdout: string; stderr: string };
 
 type ScanRecord = {
@@ -139,6 +151,11 @@ beforeAll(() => {
   // A pre-existing harness scratch artifact in the TARGET repo: the PRE-run
   // scan must record it (the scans are evidence, not gates).
   fs.writeFileSync(path.join(targetRepo, "TEMP_pre_existing_out"), "harness scratch\n");
+  // Plant the historical corpus shapes too — the scan is calibrated to the
+  // OBSERVED artifacts, not just the terminal `_out.txt`/`_err.txt` form.
+  for (const name of HISTORICAL_TEMP_ARTIFACTS) {
+    fs.writeFileSync(path.join(targetRepo, name), "observed-corpus scratch\n");
+  }
   sessionHead = gitIn(sessionRepo, "rev-parse", "HEAD").trim();
   targetHead = gitIn(targetRepo, "rev-parse", "HEAD").trim();
 }, 120_000);
@@ -227,6 +244,15 @@ describe("launch-workflow.mjs prepare", () => {
     120_000,
   );
 
+  it("the TEMP* scan detects the full historical artifact corpus (mid-name _out_/_err_ pairs and the U+F03A-prefixed shape)", () => {
+    expect(prepared, "prepare must have succeeded first").toBeDefined();
+    for (const name of HISTORICAL_TEMP_ARTIFACTS) {
+      expect(prepared.pre_scan.target_repo, `scan must detect observed shape ${JSON.stringify(name)}`).toContain(
+        name,
+      );
+    }
+  });
+
   it(
     "fails closed (creating nothing) when the OS temp root resolves inside a repo working tree",
     () => {
@@ -312,6 +338,11 @@ describe("launch-workflow.mjs post-scan", () => {
       expect(parsed.clean).toBe(false);
       expect(parsed.post_scan.launch_cwd).toContain("TEMP_planted_err");
       expect(parsed.post_scan.target_repo).toContain("TEMP_pre_existing_out");
+      // The historical corpus keeps the post-run scan honest — never falsely
+      // clean while any observed artifact shape is present.
+      for (const name of HISTORICAL_TEMP_ARTIFACTS) {
+        expect(parsed.post_scan.target_repo, `post-scan must detect ${JSON.stringify(name)}`).toContain(name);
+      }
       expect(parsed.post_scan.session_repo).toEqual([]);
 
       const evidence = readEvidence(prepared.run_id);

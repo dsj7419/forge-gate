@@ -47,9 +47,13 @@ import { fileURLToPath } from "node:url";
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FORGE_CLI_RESOLVER = path.join(SCRIPT_DIR, "run-forge-cli.mjs");
 
-// The harness scratch shape this launcher scans for (the producer writes
-// TEMP*_out / TEMP*_err pairs into the launch cwd).
-const TEMP_ARTIFACT_RE = /^TEMP.*_(out|err)(\..*)?$/;
+// The harness scratch shape this launcher scans for — calibrated to the FULL
+// observed artifact corpus (live runs, 2026-06): terminal pairs like
+// TEMPfv_out.txt / TEMPfcr_out.txt / TEMPfr_se_err.txt, mid-name pairs like
+// TEMPfg_out_lp.txt / TEMPfg_err_lp.txt, and the recorded leading U+F03A byte
+// on observed names. Shape: an optional U+F03A prefix, then TEMP*, with
+// `_out` / `_err` at the end, before a dot, or before an underscore.
+const TEMP_ARTIFACT_RE = /^\uF03A?TEMP.*_(out|err)(?=$|\.|_)/;
 const SCRATCH_NAMESPACE_RE = /^forge-launch-[0-9a-f-]+$/i;
 
 const PREVENTION_CLAIM =
