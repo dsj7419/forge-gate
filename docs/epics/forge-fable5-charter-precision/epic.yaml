@@ -1,0 +1,8 @@
+schema_version: 1
+id: forge-fable5-charter-precision
+title: Clarify PM commit-gate semantics and add grounded-claim clause to role charters
+sprints:
+  - sprint-01-charter-precision
+gate_policy:
+  default_push: human
+  default_merge: human
