@@ -282,3 +282,11 @@ synthesized output.
   `verify-install` reports it stale post-merge until `pnpm install-commands`
   refreshes it; the run that produces this edit is **bootstrap**-governed by the
   previously-installed text.
+
+## Workflow-runner launch pointer (not this command)
+
+The **workflow-backed** runner (`workflows/forge-run-ticket.workflow.js`) must be launched from a Forge-owned
+OS-temp scratch cwd via `scripts/launch-workflow.mjs`; its preflight verifies the observed launch cwd and fails
+closed (`PREFLIGHT_LAUNCH_CWD_UNSAFE`) before lock acquire or any mutation. See the README section "Workflow
+runs: the OS-temp scratch launch (operator procedure)". This interactive command's protocol above is unchanged
+by that gate.
