@@ -1,0 +1,8 @@
+schema_version: 1
+id: forge-workflow-crash-path-owner-release
+title: Crash-path owner-checked release on unhandled workflow failure
+sprints:
+  - sprint-01-crash-path
+gate_policy:
+  default_push: human
+  default_merge: human
