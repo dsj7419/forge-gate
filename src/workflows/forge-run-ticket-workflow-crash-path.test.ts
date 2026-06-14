@@ -73,11 +73,16 @@ describe("forge-run-ticket workflow ↔ crash-path owner-checked release", () =>
       });
     }
 
-    it("wraps the workflow lifecycle in a try/catch", () => {
+    it("wraps the post-acquire lifecycle in the new try/IIFE crash wrapper (not just any try/catch)", () => {
       const src = text();
-      // A try block and a catch handler exist.
-      expect(src).toMatch(/\btry\s*\{/);
-      expect(src).toMatch(/\bcatch\s*\(/);
+      // Anchor on the lifecycle wrapper UNIQUE to this ticket — the workflow body is an async
+      // IIFE assigned to `workflowOutcome` directly inside a `try {`, closed by the dedicated
+      // lifecycle catch, and the captured outcome is returned. These tokens are absent on main,
+      // so — unlike a bare /try {/ + /catch (/ whole-file match — this cannot be satisfied by a
+      // pre-existing unrelated try/catch, and it goes red if the lifecycle wrap is dropped.
+      expect(src).toMatch(/\btry\s*\{\s*workflowOutcome\s*=\s*await\s*\(async\s*\(\)\s*=>\s*\{/);
+      expect(src).toContain("} catch (error) {");
+      expect(src).toContain("return workflowOutcome;");
     });
 
     it("catch-only (RATIFIED): no `finally` release guard", () => {
