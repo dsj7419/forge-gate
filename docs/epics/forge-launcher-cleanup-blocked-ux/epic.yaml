@@ -1,0 +1,8 @@
+schema_version: 1
+id: forge-launcher-cleanup-blocked-ux
+title: Typed CLEANUP_BLOCKED for launcher cleanup when the scratch cwd is still held
+sprints:
+  - sprint-01-cleanup-ux
+gate_policy:
+  default_push: human
+  default_merge: human
