@@ -352,6 +352,23 @@ function deriveNextDecisionId(ledgerDecisions) {
 }
 
 // ===========================================================================
+// Lifecycle wrap (catch-only — PM-RATIFIED). Any unhandled error anywhere in
+// the workflow body — e.g. `writeForgeFile` throwing on a denial, or any
+// `runCore*` throwing — is caught HERE so the throw can never escape the
+// workflow and orphan `lock.json`. The catch is the SOLE load-bearing path:
+// there is intentionally NO `finally` release guard (`releaseLockIfOwned()` is
+// already `acquired`-gated and idempotent, so a `finally` would be a no-op that
+// adds only double-release / return-shape risk). On a crash the catch (1)
+// attempts the owner-checked release FIRST inside its own guard (a release-time
+// failure is recorded, never re-thrown), (2) only THEN best-effort logs an
+// evidence breadcrumb — no extra `.forge/` write (PM-ratified report-free: the
+// typed terminal IS the forensic record), and (3) returns the typed
+// `UNHANDLED_WORKFLOW_FAILURE` terminal. The normal PASS / standard-ESCALATE
+// outcomes are byte-for-byte unaffected — they flow out of the IIFE unchanged.
+let workflowOutcome;
+try {
+  workflowOutcome = await (async () => {
+// ===========================================================================
 // Phase 1 — Preflight (via core-runner only).
 // ===========================================================================
 await phase("preflight");
@@ -830,6 +847,36 @@ return {
   // report and performs any commit / push / PR / merge manually.
   outward_action_taken: false,
 };
+  })();
+} catch (error) {
+  // Crash path — release-first, then best-effort evidence, then typed terminal.
+  // (1) Owner-checked release in its OWN guard so a release-time failure is
+  // recorded (lock_release_attempted: true with the failure detail) instead of
+  // re-thrown — a throw here must never undo or mask the crash handling.
+  log("UNHANDLED_WORKFLOW_FAILURE: caught unhandled error; attempting owner-checked release");
+  let crashReleaseResult = null;
+  try {
+    crashReleaseResult = await releaseLockIfOwned();
+  } catch (releaseError) {
+    crashReleaseResult = {
+      release_failed: true,
+      error_class: releaseError instanceof Error ? releaseError.name : "NonError",
+      error_message: boundedErrorMessage(releaseError),
+    };
+  }
+  // (2) Best-effort evidence AFTER the release — a log breadcrumb only. No extra
+  // `.forge/` write (PM-ratified report-free): the returned typed terminal is the
+  // forensic record. Guarded so an evidence-emit failure can never block/undo the
+  // release that already happened.
+  try {
+    log(`UNHANDLED_WORKFLOW_FAILURE: ${error instanceof Error ? error.name : "NonError"}; lock_release_attempted=${crashReleaseResult !== null}`);
+  } catch {
+    // best-effort only
+  }
+  // (3) Return the typed crash terminal. No outward action; human gate required.
+  workflowOutcome = buildUnhandledFailure(error, crashReleaseResult, runId);
+}
+return workflowOutcome;
 
 // --- Escalation + correction helpers ---------------------------------------
 
@@ -873,6 +920,56 @@ async function releaseLockIfOwned() {
   acquired = false;
   return { exit: release.exit, ...release.json };
 }
+
+// --- crash-path terminal builder (pure; extracted and EXECUTED by the protocol test) ---
+
+/**
+ * boundedErrorMessage — sanitize an arbitrary thrown value into a bounded string.
+ * Non-Error throws are stringified; the message is truncated to a fixed cap so no
+ * unbounded blob (and, for an Error, never the stack) enters the terminal object.
+ */
+function boundedErrorMessage(error) {
+  const MAX = 500;
+  const raw =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : (() => {
+            try {
+              return String(error);
+            } catch {
+              return "[unstringifiable error]";
+            }
+          })();
+  const text = typeof raw === "string" ? raw : String(raw);
+  return text.length > MAX ? `${text.slice(0, MAX)}… [truncated]` : text;
+}
+
+/**
+ * buildUnhandledFailure — the pure crash-terminal builder. Constructs the typed
+ * `UNHANDLED_WORKFLOW_FAILURE` outcome from the caught error, the
+ * `releaseLockIfOwned()` result (or null when pre-acquire / nothing owned), and
+ * the run id. This is a DISTINCT shape from `escalate()` — it must NOT overload
+ * the standard ESCALATE semantics. Error detail is sanitized/truncated
+ * (class + bounded message); NO stack trace is placed in the returned object.
+ * A foreign/absent/malformed `releaseResult` is recorded verbatim, never cleared.
+ */
+function buildUnhandledFailure(error, releaseResult, runIdValue) {
+  return {
+    result: "ESCALATE",
+    code: "UNHANDLED_WORKFLOW_FAILURE",
+    outward_action_taken: false,
+    human_gate_required: true,
+    run_id: runIdValue,
+    lock_release_attempted: releaseResult !== null,
+    lock_release_result: releaseResult,
+    original_error_class: error instanceof Error ? error.name : "NonError",
+    original_error_message: boundedErrorMessage(error),
+  };
+}
+
+// --- end crash-path terminal builder ---
 
 /**
  * Terminate the run with an ESCALATE handoff. No outward action. Owner-aware:
