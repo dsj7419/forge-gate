@@ -172,6 +172,25 @@ function evidenceArchivePath(sessionRepoRoot, runId) {
   return path.join(sessionRepoRoot, ".forge", "launch-evidence", `${runId}.json`);
 }
 
+// --- cleanup-teardown error classifier ---------------------------------------
+// Pure, dependency-free so a source-level test can extract-and-execute it. Maps
+// a teardown failure to a typed CLEANUP_BLOCKED result ONLY when the OS reports
+// the scratch dir is busy/locked (Windows EPERM/EBUSY — e.g. it is still a live
+// scratch-launched Claude session's cwd). Any other error signals "not handled"
+// (null) so the caller never masks or swallows a different failure.
+function classifyCleanupTeardownError(error, scratchPosix) {
+  const code = error && typeof error === "object" ? error.code : undefined;
+  if (code !== "EPERM" && code !== "EBUSY") return null;
+  return {
+    ok: false,
+    code: "CLEANUP_BLOCKED",
+    error:
+      `cannot remove the Forge-owned scratch launch cwd ${scratchPosix}: it is busy/locked ` +
+      `(${code}). Close the scratch-launched Claude session, then re-run cleanup.`,
+  };
+}
+// --- end cleanup-teardown error classifier -----------------------------------
+
 /**
  * Persist the evidence to its gitignored locations: always the session repo's
  * .forge/launch-evidence archive, plus a copy inside the scratch cwd while it
@@ -418,7 +437,16 @@ function runCleanup(args) {
         `refusing to remove ${toPosix(scratch)}: its ownership marker (forge-launch-evidence.json) is missing or names a different run. Nothing was deleted.`,
       );
     }
-    fs.rmSync(scratch, { recursive: true, force: true });
+    try {
+      fs.rmSync(scratch, { recursive: true, force: true });
+    } catch (error) {
+      // Guard ONLY the teardown. A busy/locked scratch dir (still a live
+      // scratch-launched session's cwd) becomes a typed, actionable result;
+      // every other failure propagates untouched (no broad catch-all).
+      const blocked = classifyCleanupTeardownError(error, toPosix(scratch));
+      if (blocked === null) throw error;
+      fail(blocked.code, blocked.error);
+    }
     removed = true;
   }
 
