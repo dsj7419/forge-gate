@@ -269,6 +269,18 @@ ForgeGate's safety comes from **distinct layers**, and it's worth knowing which 
 The honest one-liner: **Core attests, the guard detects, the permissions hook prevents, and the human approves.**
 No layer here claims full autonomy or unsupervised readiness.
 
+### ⚠️ Operator safety: Claude Code safe mode
+
+The "prevents" layer above is a Claude Code customization, and **safe mode can disable it.** Launching Claude Code
+with `--safe-mode` (or with `CLAUDE_CODE_SAFE_MODE` set) can disable customizations — **including the permissions
+hook** — so a governed ForgeGate run started from a safe-mode session can **silently** lose the mechanical prevent
+layer.
+
+**Operator rule:** do **not** run `/forge-run-ticket` or a governed Forge workflow from a safe-mode session. If safe
+mode is enabled, exit and relaunch Claude Code normally before running ForgeGate orchestration. This is
+documentation only — automated detection is deferred. See
+[`docs/claude-code-safe-mode-operator-note.md`](docs/claude-code-safe-mode-operator-note.md).
+
 ### Not autonomous / not magic
 
 Forge **structures** Claude Code work and enforces discipline; it does **not** take over responsibility. The
