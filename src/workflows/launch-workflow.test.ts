@@ -451,3 +451,74 @@ describe("launch-workflow.mjs source contract", () => {
     expect(src).not.toMatch(/execFileSync\(\s*["'`]git["'`]/);
   });
 });
+
+/**
+ * Behavioral half: extract the pure cleanup-teardown error classifier from the
+ * SHIPPED launcher source and execute it. This proves the busy/locked → typed
+ * `CLEANUP_BLOCKED` mapping (and the no-masking invariant for any other code)
+ * with the real code, not a re-implementation — and is unit-testable WITHOUT a
+ * live held directory (the EPERM was already observed in the F1/F2 sequence).
+ */
+const CLASSIFIER_START = "// --- cleanup-teardown error classifier";
+const CLASSIFIER_END = "// --- end cleanup-teardown error classifier";
+
+type CleanupBlocked = { ok: false; code: string; error: string };
+
+type CleanupHelpers = {
+  classifyCleanupTeardownError: (
+    error: unknown,
+    scratchPosix: string,
+  ) => CleanupBlocked | null;
+};
+
+function loadCleanupHelpers(): CleanupHelpers {
+  const src = fs.readFileSync(LAUNCHER, "utf8");
+  const start = src.indexOf(CLASSIFIER_START);
+  const end = src.indexOf(CLASSIFIER_END);
+  expect(start).toBeGreaterThan(-1);
+  expect(end).toBeGreaterThan(start);
+  const body = src.slice(start, end);
+  // Cast justification: this evaluates the REAL extracted launcher classifier
+  // source (the non-tautological point of the test); the behavioral assertions
+  // below verify the exact shape this cast declares.
+  const factory = new Function(
+    `${body}\nreturn { classifyCleanupTeardownError };`,
+  ) as () => CleanupHelpers;
+  return factory();
+}
+
+describe("classifyCleanupTeardownError (extracted from the shipped launcher source and executed)", () => {
+  const GUIDANCE = "Close the scratch-launched Claude session, then re-run cleanup.";
+  const SCRATCH = "/tmp/forge-launch-abc/scratch";
+
+  it("maps an EPERM teardown failure to a typed CLEANUP_BLOCKED carrying the path + guidance", () => {
+    const { classifyCleanupTeardownError } = loadCleanupHelpers();
+    const err = Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+    const blocked = classifyCleanupTeardownError(err, SCRATCH);
+    expect(blocked).not.toBeNull();
+    expect(blocked?.ok).toBe(false);
+    expect(blocked?.code).toBe("CLEANUP_BLOCKED");
+    expect(blocked?.error).toContain(SCRATCH);
+    expect(blocked?.error).toContain(GUIDANCE);
+  });
+
+  it("maps an EBUSY teardown failure to a typed CLEANUP_BLOCKED carrying the path + guidance", () => {
+    const { classifyCleanupTeardownError } = loadCleanupHelpers();
+    const err = Object.assign(new Error("resource busy or locked"), { code: "EBUSY" });
+    const blocked = classifyCleanupTeardownError(err, SCRATCH);
+    expect(blocked).not.toBeNull();
+    expect(blocked?.code).toBe("CLEANUP_BLOCKED");
+    expect(blocked?.error).toContain(SCRATCH);
+    expect(blocked?.error).toContain(GUIDANCE);
+  });
+
+  it("does NOT mask a non-busy failure: any other error code signals not-handled (null)", () => {
+    const { classifyCleanupTeardownError } = loadCleanupHelpers();
+    const enoent = Object.assign(new Error("no such file"), { code: "ENOENT" });
+    expect(classifyCleanupTeardownError(enoent, SCRATCH)).toBeNull();
+    const noCode = new Error("plain failure with no code");
+    expect(classifyCleanupTeardownError(noCode, SCRATCH)).toBeNull();
+    const notError = "a thrown string, not an Error";
+    expect(classifyCleanupTeardownError(notError, SCRATCH)).toBeNull();
+  });
+});
