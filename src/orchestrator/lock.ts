@@ -122,6 +122,51 @@ export type StaleVerdictResult =
   | { ok: true; verdict: null } // no lock present
   | { ok: false; code: "LOCK_MALFORMED"; errors: string[] };
 
+/**
+ * Human confirmation for a break. A break proceeds only when the operator
+ * echoes the on-disk holder's `run_id` *and* explicitly confirms with `yes`.
+ * Absent/partial confirmation runs in preview mode (computes, mutates nothing).
+ */
+export type BreakOptions = {
+  /** The holder `run_id` the operator echoed (must match the on-disk holder). */
+  confirmRunId?: string;
+  /** Explicit go-ahead. Without it the call is a preview and clears nothing. */
+  yes?: boolean;
+};
+
+/**
+ * The audit record emitted on a successful break — the load-bearing facts of
+ * which provably-dead holder was cleared, why, and when.
+ */
+export type BreakAudit = {
+  epic_path: string;
+  run_id: string;
+  pid: number;
+  host: string;
+  reasons: StaleReason[];
+  action: "break";
+  timestamp: string;
+  result: "broken";
+};
+
+/** A preview of what a break *would* do — informational, never mutating. */
+export type BreakPreview = {
+  holder: LockRecord;
+  reasons: StaleReason[];
+  /** True only when same-host provable death (`dead_pid`) authorizes a break. */
+  breakable: boolean;
+};
+
+export type BreakResult =
+  | { ok: true; broken: true; audit: BreakAudit }
+  | { ok: true; broken: false; preview: BreakPreview }
+  | { ok: false; code: "LOCK_ABSENT" }
+  | { ok: false; code: "LOCK_MALFORMED"; errors: string[] }
+  | { ok: false; code: "LOCK_NOT_STALE"; holder: LockRecord }
+  | { ok: false; code: "LOCK_LIVENESS_UNPROVEN"; holder: LockRecord; reasons: StaleReason[] }
+  | { ok: false; code: "LOCK_CONFIRM_MISMATCH"; holder: LockRecord }
+  | { ok: false; code: "LOCK_CHANGED" };
+
 function describeIssues(error: z.ZodError): string[] {
   return error.issues.map((issue) => {
     const at = issue.path.length > 0 ? `${issue.path.join(".")}: ` : "";
@@ -269,4 +314,89 @@ export function staleVerdict(
 
   if (reasons.length === 0) return { ok: true, verdict: { stale: false, holder } };
   return { ok: true, verdict: { stale: true, holder, reasons, crossHost } };
+}
+
+/**
+ * Human-gated recovery of an orphaned lock — the *only* sanctioned path that
+ * clears a lock the caller does not own. It is dead-PID-decisive: a break is
+ * authorized **only** by a same-host provable `dead_pid` (the verdict's other
+ * signals — `expired_heartbeat` / `exceeded_acquire_ttl` — never authorize one,
+ * since no heartbeat updater exists and an aged heartbeat does not prove death).
+ *
+ * Safety layers, in order:
+ *  1. The lock must exist and parse (`LOCK_ABSENT` / `LOCK_MALFORMED`, intact).
+ *  2. It must be stale; a fresh/live lock refuses (`LOCK_NOT_STALE`, intact).
+ *  3. The stale reason must include same-host `dead_pid`; otherwise the holder's
+ *     death is unproven and the break refuses (`LOCK_LIVENESS_UNPROVEN`, intact).
+ *     This is what rules out TTL-only, heartbeat-only, and cross-host locks.
+ *  4. The operator must echo the on-disk holder's `run_id` *and* set `yes`.
+ *     Without `yes` (with or without `confirmRunId`) the call is a **preview**:
+ *     it reports the holder, reasons, and breakability and clears nothing. A
+ *     `yes` with a missing/wrong `confirmRunId` refuses (`LOCK_CONFIRM_MISMATCH`).
+ *  5. Immediately before clearing, the lock is **re-read** (CAS). If the holder
+ *     changed — a new run acquired in the window, or the file vanished — the
+ *     break aborts (`LOCK_CHANGED`) and removes nothing. Only an unchanged,
+ *     provably-dead holder is cleared via `LockIo.removeFile`.
+ *
+ * This function is never called automatically — it is the human CLI recovery
+ * path only. `acquire`/`release`/`status` semantics are untouched.
+ */
+export function breakStaleLock(
+  file: string,
+  io: LockIo,
+  clock: LockClock,
+  thresholds: StaleThresholds,
+  options: BreakOptions,
+): BreakResult {
+  const verdict = staleVerdict(file, io, clock, thresholds);
+  if (!verdict.ok) return { ok: false, code: "LOCK_MALFORMED", errors: verdict.errors };
+  if (verdict.verdict === null) return { ok: false, code: "LOCK_ABSENT" };
+
+  // Fresh/live lock: never break, regardless of confirmation.
+  if (!verdict.verdict.stale) {
+    return { ok: false, code: "LOCK_NOT_STALE", holder: verdict.verdict.holder };
+  }
+
+  const { holder, reasons } = verdict.verdict;
+  // Same-host provable death is the only signal that authorizes a break.
+  const breakable = reasons.includes("dead_pid");
+
+  // No explicit go-ahead → preview. Report breakability, mutate nothing.
+  if (options.yes !== true) {
+    return { ok: true, broken: false, preview: { holder, reasons, breakable } };
+  }
+
+  // Authorized break requested. Liveness must be provable.
+  if (!breakable) {
+    return { ok: false, code: "LOCK_LIVENESS_UNPROVEN", holder, reasons };
+  }
+
+  // The operator must echo the on-disk holder exactly.
+  if (options.confirmRunId !== holder.run_id) {
+    return { ok: false, code: "LOCK_CONFIRM_MISMATCH", holder };
+  }
+
+  // CAS: re-read immediately before clearing. If the holder changed (new run in
+  // the window) or vanished, abort — never clear a lock we did not just verify.
+  const recheck = readLock(file, io);
+  if (!recheck.ok) return { ok: false, code: "LOCK_MALFORMED", errors: recheck.errors };
+  if (recheck.record === null || recheck.record.run_id !== holder.run_id) {
+    return { ok: false, code: "LOCK_CHANGED" };
+  }
+
+  io.removeFile(file);
+  return {
+    ok: true,
+    broken: true,
+    audit: {
+      epic_path: holder.epic_path,
+      run_id: holder.run_id,
+      pid: holder.pid,
+      host: holder.host,
+      reasons,
+      action: "break",
+      timestamp: new Date(clock.now()).toISOString(),
+      result: "broken",
+    },
+  };
 }

@@ -5,8 +5,10 @@ import * as path from "node:path";
 import type { CliIo } from "../cli/run.js";
 import {
   acquireLock,
+  breakStaleLock,
   releaseLock,
   staleVerdict,
+  type BreakOptions,
   type LockClock,
   type LockIo,
   type LockRecord,
@@ -41,8 +43,15 @@ import {
  * the lock callable.)
  *
  * `status` is report-only: it computes a fresh/stale verdict and never clears,
- * steals, or force-breaks a lock. Stale-recovery UX (a `--force`/`break` path)
- * is a deliberately deferred slice.
+ * steals, or force-breaks a lock.
+ *
+ * `break` is the human-gated stale-recovery surface (T01). It clears an orphaned
+ * lock **only** when the holder is provably dead on the same host (`dead_pid`),
+ * the operator echoes the holder `run_id` via `--confirm-run-id`, and `--yes` is
+ * given; it re-reads (CAS) immediately before clearing. Without `--yes` it is a
+ * non-mutating preview. TTL-only / heartbeat-only / cross-host breaks are
+ * deferred — an aged heartbeat does not prove death. `break` is human-CLI only;
+ * no workflow, orchestrator, or crash handler ever calls it.
  */
 
 function isErrno(value: unknown): value is NodeJS.ErrnoException {
@@ -83,6 +92,27 @@ export const defaultLockIo: LockIo = {
   },
 };
 
+/**
+ * Real `LockClock` binding: wall-clock time, the current host, and same-host pid
+ * liveness via `process.kill(pid, 0)`. Cross-host liveness is unverifiable, so
+ * `staleVerdict`/`breakStaleLock` consult this only when the holder's host
+ * matches. Injected into `runLock` (defaulted) so tests drive a deterministic
+ * clock without touching real processes.
+ */
+export const defaultLockClock: LockClock = {
+  now: () => Date.now(),
+  currentHost: os.hostname(),
+  isProcessAlive: (pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (thrown) {
+      // ESRCH → no such process (dead). EPERM → exists but not signalable (alive).
+      return isErrno(thrown) && thrown.code === "EPERM";
+    }
+  },
+};
+
 /** Defaulted stale thresholds when the status flags are omitted. */
 const DEFAULT_HEARTBEAT_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const DEFAULT_ACQUIRE_TTL_MS = 60 * 60 * 1000; // 1 hour
@@ -90,17 +120,31 @@ const DEFAULT_ACQUIRE_TTL_MS = 60 * 60 * 1000; // 1 hour
 const USAGE =
   "usage: forge lock acquire <epic> --run-id <id> --session-id <s> --ticket <t> --branch <b> --repo-root <r>\n" +
   "       forge lock release <epic> --run-id <id>\n" +
-  "       forge lock status <epic> [--heartbeat-ttl-ms <n>] [--acquire-ttl-ms <n>]";
+  "       forge lock status <epic> [--heartbeat-ttl-ms <n>] [--acquire-ttl-ms <n>]\n" +
+  "       forge lock break <epic> [--confirm-run-id <holder-run-id> --yes] [--heartbeat-ttl-ms <n>] [--acquire-ttl-ms <n>]";
 
 const ACQUIRE_FLAGS = new Set(["--run-id", "--session-id", "--ticket", "--branch", "--repo-root"]);
 const RELEASE_FLAGS = new Set(["--run-id"]);
 const STATUS_FLAGS = new Set(["--heartbeat-ttl-ms", "--acquire-ttl-ms"]);
+const BREAK_FLAGS = new Set(["--confirm-run-id", "--yes", "--heartbeat-ttl-ms", "--acquire-ttl-ms"]);
 
-export function runLock(args: string[], cli: CliIo, lockIo: LockIo): number {
+/**
+ * `clock` is injected (defaulted to the real binding) so the dead-PID-decisive
+ * `break`/`status` behavior is exercised against a deterministic clock in tests.
+ * `run.ts` calls this with three args; the optional clock keeps that route
+ * unchanged.
+ */
+export function runLock(
+  args: string[],
+  cli: CliIo,
+  lockIo: LockIo,
+  clock: LockClock = defaultLockClock,
+): number {
   const subcommand = args[0];
   if (subcommand === "acquire") return runAcquire(args.slice(1), cli, lockIo);
   if (subcommand === "release") return runRelease(args.slice(1), cli, lockIo);
-  if (subcommand === "status") return runStatus(args.slice(1), cli, lockIo);
+  if (subcommand === "status") return runStatus(args.slice(1), cli, lockIo, clock);
+  if (subcommand === "break") return runBreak(args.slice(1), cli, lockIo, clock);
   return usage(cli, `unknown subcommand: ${String(subcommand)}`);
 }
 
@@ -192,7 +236,7 @@ function runRelease(rest: string[], cli: CliIo, lockIo: LockIo): number {
   return 0;
 }
 
-function runStatus(rest: string[], cli: CliIo, lockIo: LockIo): number {
+function runStatus(rest: string[], cli: CliIo, lockIo: LockIo, clock: LockClock): number {
   const epic = rest[0];
   if (epic === undefined || epic.startsWith("--")) return usage(cli, "lock status requires <epic>");
   const flags = rest.slice(1);
@@ -200,36 +244,77 @@ function runStatus(rest: string[], cli: CliIo, lockIo: LockIo): number {
   const unknown = flags.filter((arg) => arg.startsWith("--") && !STATUS_FLAGS.has(arg));
   if (unknown.length > 0) return usage(cli, `unknown option(s): ${unknown.join(", ")}`);
 
-  const heartbeatTtlMs = numericFlag(flags, "--heartbeat-ttl-ms", DEFAULT_HEARTBEAT_TTL_MS);
-  const acquireTtlMs = numericFlag(flags, "--acquire-ttl-ms", DEFAULT_ACQUIRE_TTL_MS);
-  if (heartbeatTtlMs === null || acquireTtlMs === null) {
+  const thresholds = parseThresholds(flags);
+  if (thresholds === null) {
     return usage(cli, "--heartbeat-ttl-ms and --acquire-ttl-ms must be non-negative integers");
   }
 
-  const clock: LockClock = {
-    now: () => Date.now(),
-    currentHost: os.hostname(),
-    isProcessAlive: (pid) => {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch (thrown) {
-        // ESRCH → no such process (dead). EPERM → exists but not signalable (alive).
-        return isErrno(thrown) && thrown.code === "EPERM";
-      }
-    },
-  };
-  const thresholds: StaleThresholds = { heartbeatTtlMs, acquireTtlMs };
-
   const file = lockPath(epic);
   // Report only: staleVerdict never clears or steals. We surface the verdict and
-  // exit 0 even when stale — stale-recovery (force-break) is a deferred slice.
+  // exit 0 even when stale — recovery is the separate `break` surface.
   const result = staleVerdict(file, lockIo, clock, thresholds);
   if (!result.ok) {
     cli.print(JSON.stringify({ ok: false, code: result.code, errors: result.errors }, null, 2));
     return 1;
   }
   cli.print(JSON.stringify({ ok: true, verdict: result.verdict }, null, 2));
+  return 0;
+}
+
+/**
+ * Human-gated stale-lock recovery (T01). Without `--yes` this is a non-mutating
+ * preview. A break proceeds only with both `--confirm-run-id <holder-run-id>`
+ * (echoing the on-disk holder) and `--yes`, and only when the holder is provably
+ * dead on the same host; `breakStaleLock` re-reads (CAS) before clearing.
+ * Thresholds tune only the preview/verdict — they never authorize a break.
+ */
+function runBreak(rest: string[], cli: CliIo, lockIo: LockIo, clock: LockClock): number {
+  const epic = rest[0];
+  if (epic === undefined || epic.startsWith("--")) return usage(cli, "lock break requires <epic>");
+  const flags = rest.slice(1);
+
+  const unknown = flags.filter((arg) => arg.startsWith("--") && !BREAK_FLAGS.has(arg));
+  if (unknown.length > 0) return usage(cli, `unknown option(s): ${unknown.join(", ")}`);
+
+  const thresholds = parseThresholds(flags);
+  if (thresholds === null) {
+    return usage(cli, "--heartbeat-ttl-ms and --acquire-ttl-ms must be non-negative integers");
+  }
+
+  const confirmRunId = flagValue(flags, "--confirm-run-id");
+  // Build the options without an explicit `undefined` key: exactOptionalPropertyTypes
+  // rejects `confirmRunId: undefined`, and an absent key is the intended "not echoed".
+  const options: BreakOptions = {
+    yes: flags.includes("--yes"),
+    ...(confirmRunId === undefined ? {} : { confirmRunId }),
+  };
+
+  const file = lockPath(epic);
+  const result = breakStaleLock(file, lockIo, clock, thresholds, options);
+  if (!result.ok) {
+    if (result.code === "LOCK_MALFORMED") {
+      cli.print(JSON.stringify({ ok: false, code: result.code, errors: result.errors }, null, 2));
+    } else if (result.code === "LOCK_ABSENT" || result.code === "LOCK_CHANGED") {
+      cli.print(JSON.stringify({ ok: false, code: result.code }, null, 2));
+    } else if (result.code === "LOCK_LIVENESS_UNPROVEN") {
+      cli.print(
+        JSON.stringify(
+          { ok: false, code: result.code, holder: result.holder, reasons: result.reasons },
+          null,
+          2,
+        ),
+      );
+    } else {
+      cli.print(JSON.stringify({ ok: false, code: result.code, holder: result.holder }, null, 2));
+    }
+    return 1;
+  }
+  if (!result.broken) {
+    // Preview: informational, no mutation. Exit 0.
+    cli.print(JSON.stringify({ ok: true, broken: false, preview: result.preview }, null, 2));
+    return 0;
+  }
+  cli.print(JSON.stringify({ ok: true, broken: true, audit: result.audit }, null, 2));
   return 0;
 }
 
@@ -244,6 +329,18 @@ function flagValue(args: string[], flag: string): string | undefined {
   const value = args[index + 1];
   if (value === undefined || value.startsWith("--")) return undefined;
   return value;
+}
+
+/**
+ * Parse the shared `--heartbeat-ttl-ms` / `--acquire-ttl-ms` flags into
+ * `StaleThresholds`, applying defaults when omitted. Returns `null` on an
+ * invalid value (a usage error), so both `status` and `break` reject identically.
+ */
+function parseThresholds(flags: string[]): StaleThresholds | null {
+  const heartbeatTtlMs = numericFlag(flags, "--heartbeat-ttl-ms", DEFAULT_HEARTBEAT_TTL_MS);
+  const acquireTtlMs = numericFlag(flags, "--acquire-ttl-ms", DEFAULT_ACQUIRE_TTL_MS);
+  if (heartbeatTtlMs === null || acquireTtlMs === null) return null;
+  return { heartbeatTtlMs, acquireTtlMs };
 }
 
 /**
