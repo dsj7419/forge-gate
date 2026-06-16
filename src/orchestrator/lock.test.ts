@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   acquireLock,
+  breakStaleLock,
   LOCK_SCHEMA,
   LockRecordSchema,
   readLock,
@@ -419,5 +420,307 @@ describe("staleVerdict — reports, never auto-clears (AC7)", () => {
     if (result.ok) return;
     expect(result.code).toBe("LOCK_MALFORMED");
     expect(state[LOCK]).toBe(before);
+  });
+});
+
+describe("breakStaleLock — human-gated, dead-PID-decisive (T01)", () => {
+  // Same-host dead pid: the only provable-death signal that authorizes a break.
+  const DEAD: LockClock = { ...ALIVE, isProcessAlive: () => false };
+  // Confirmation flags that authorize the break for the default holder (run-A).
+  const CONFIRMED = { confirmRunId: "run-A", yes: true } as const;
+
+  test("preview (no confirmation flags) reports what would break and clears nothing — even when dead-PID stale", () => {
+    const { io, state, removes } = makeIo({ [LOCK]: serializeLock(record()) });
+    const before = state[LOCK];
+
+    const result = breakStaleLock(LOCK, io, DEAD, THRESHOLDS, {});
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Preview computes but does not break.
+    expect(result.broken).toBe(false);
+    if (result.broken) return;
+    expect(result.preview.holder.run_id).toBe("run-A");
+    expect(result.preview.reasons).toContain("dead_pid");
+    expect(result.preview.breakable).toBe(true);
+    // Nothing cleared, no remove issued.
+    expect(removes).toEqual([]);
+    expect(state[LOCK]).toBe(before);
+  });
+
+  test("AC8: a same-host dead pid breaks only with --confirm-run-id + --yes and clears the lock", () => {
+    const { io, state, removes } = makeIo({ [LOCK]: serializeLock(record()) });
+
+    const result = breakStaleLock(LOCK, io, DEAD, THRESHOLDS, CONFIRMED);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.broken).toBe(true);
+    if (!result.broken) return;
+    // Lock cleared via removeFile.
+    expect(removes).toEqual([LOCK]);
+    expect(Object.prototype.hasOwnProperty.call(state, LOCK)).toBe(false);
+    // AC14: the audit captures the load-bearing facts.
+    expect(result.audit.epic_path).toBe("docs/epics/example");
+    expect(result.audit.run_id).toBe("run-A");
+    expect(result.audit.pid).toBe(1234);
+    expect(result.audit.host).toBe("host-A");
+    expect(result.audit.reasons).toContain("dead_pid");
+    expect(result.audit.action).toBe("break");
+    expect(typeof result.audit.timestamp).toBe("string");
+    expect(result.audit.result).toBe("broken");
+  });
+
+  test("AC3: --confirm-run-id without --yes refuses and clears nothing (preview / no-mutation)", () => {
+    const { io, state, removes } = makeIo({ [LOCK]: serializeLock(record()) });
+    const before = state[LOCK];
+
+    const result = breakStaleLock(LOCK, io, DEAD, THRESHOLDS, { confirmRunId: "run-A" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.broken).toBe(false);
+    expect(removes).toEqual([]);
+    expect(state[LOCK]).toBe(before);
+  });
+
+  test("AC4: --yes without --confirm-run-id refuses (no holder echo) and clears nothing", () => {
+    const { io, state, removes } = makeIo({ [LOCK]: serializeLock(record()) });
+    const before = state[LOCK];
+
+    const result = breakStaleLock(LOCK, io, DEAD, THRESHOLDS, { yes: true });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("LOCK_CONFIRM_MISMATCH");
+    expect(removes).toEqual([]);
+    expect(state[LOCK]).toBe(before);
+  });
+
+  test("AC5: a wrong --confirm-run-id (not the on-disk holder) refuses (LOCK_CONFIRM_MISMATCH) and leaves the lock intact", () => {
+    const { io, state, removes } = makeIo({ [LOCK]: serializeLock(record({ run_id: "run-A" })) });
+    const before = state[LOCK];
+
+    const result = breakStaleLock(LOCK, io, DEAD, THRESHOLDS, { confirmRunId: "run-WRONG", yes: true });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("LOCK_CONFIRM_MISMATCH");
+    if (result.code !== "LOCK_CONFIRM_MISMATCH") return;
+    expect(result.holder.run_id).toBe("run-A");
+    expect(removes).toEqual([]);
+    expect(state[LOCK]).toBe(before);
+  });
+
+  test("AC6: a fresh (live, same-host) lock refuses — even with confirmation — and stays intact (the headline negative)", () => {
+    const { io, state, removes } = makeIo({ [LOCK]: serializeLock(record()) });
+    const before = state[LOCK];
+
+    const result = breakStaleLock(LOCK, io, ALIVE, THRESHOLDS, CONFIRMED);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("LOCK_NOT_STALE");
+    expect(removes).toEqual([]);
+    expect(state[LOCK]).toBe(before);
+  });
+
+  test("AC6: a fresh lock preview reports not-breakable and clears nothing", () => {
+    const { io, state, removes } = makeIo({ [LOCK]: serializeLock(record()) });
+    const before = state[LOCK];
+
+    const result = breakStaleLock(LOCK, io, ALIVE, THRESHOLDS, {});
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("LOCK_NOT_STALE");
+    expect(removes).toEqual([]);
+    expect(state[LOCK]).toBe(before);
+  });
+
+  test("AC7: a live same-host pid refuses even when heartbeat/TTL are aged (no dead_pid → liveness unproven), intact", () => {
+    // Heartbeat and acquire are both ancient, but the pid is alive on this host.
+    // An aged heartbeat does not prove death; only dead_pid authorizes a break.
+    const aged = record({
+      heartbeat_ts: "2026-06-02T00:00:00.000Z",
+      acquired_ts: "2026-06-02T00:00:00.000Z",
+    });
+    const { io, state, removes } = makeIo({ [LOCK]: serializeLock(aged) });
+    const before = state[LOCK];
+
+    const result = breakStaleLock(LOCK, io, ALIVE, THRESHOLDS, CONFIRMED);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("LOCK_LIVENESS_UNPROVEN");
+    expect(removes).toEqual([]);
+    expect(state[LOCK]).toBe(before);
+  });
+
+  test("AC10: a TTL-only stale lock (acquire TTL exceeded, pid alive) refuses — no dead_pid → not authorized, intact", () => {
+    const ttlOnly = record({ acquired_ts: "2026-06-02T00:00:00.000Z" });
+    const { io, state, removes } = makeIo({ [LOCK]: serializeLock(ttlOnly) });
+    const before = state[LOCK];
+
+    // stale verdict: exceeded_acquire_ttl, but pid alive → no dead_pid.
+    const verdict = staleVerdict(LOCK, io, ALIVE, THRESHOLDS);
+    expect(verdict.ok).toBe(true);
+    if (verdict.ok && verdict.verdict && verdict.verdict.stale) {
+      expect(verdict.verdict.reasons).toContain("exceeded_acquire_ttl");
+      expect(verdict.verdict.reasons).not.toContain("dead_pid");
+    }
+
+    const result = breakStaleLock(LOCK, io, ALIVE, THRESHOLDS, CONFIRMED);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("LOCK_LIVENESS_UNPROVEN");
+    expect(removes).toEqual([]);
+    expect(state[LOCK]).toBe(before);
+  });
+
+  test("AC10: a heartbeat-only stale lock (heartbeat expired, pid alive) refuses — no dead_pid → not authorized, intact", () => {
+    const hbOnly = record({ heartbeat_ts: "2026-06-02T00:00:00.000Z" });
+    const { io, state, removes } = makeIo({ [LOCK]: serializeLock(hbOnly) });
+    const before = state[LOCK];
+
+    const result = breakStaleLock(LOCK, io, ALIVE, THRESHOLDS, CONFIRMED);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("LOCK_LIVENESS_UNPROVEN");
+    expect(removes).toEqual([]);
+    expect(state[LOCK]).toBe(before);
+  });
+
+  test("AC9: a cross-host lock refuses — cross-host pid liveness is unverifiable (no provable death), intact", () => {
+    // Holder on host-B, caller host-A. Even with a dead-pid clock, cross-host pid
+    // liveness is not consulted, so there is no dead_pid → not breakable.
+    const crossHost = record({ host: "host-B" });
+    const { io, state, removes } = makeIo({ [LOCK]: serializeLock(crossHost) });
+    const before = state[LOCK];
+
+    const result = breakStaleLock(LOCK, io, DEAD, THRESHOLDS, { confirmRunId: "run-A", yes: true });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    // A fresh cross-host lock (live by heartbeat/TTL) is simply not stale.
+    expect(result.code).toBe("LOCK_NOT_STALE");
+    expect(removes).toEqual([]);
+    expect(state[LOCK]).toBe(before);
+  });
+
+  test("AC9: a cross-host lock that is also heartbeat-stale still refuses (no dead_pid → liveness unproven), intact", () => {
+    const crossHostStale = record({ host: "host-B", heartbeat_ts: "2026-06-02T00:00:00.000Z" });
+    const { io, state, removes } = makeIo({ [LOCK]: serializeLock(crossHostStale) });
+    const before = state[LOCK];
+
+    const result = breakStaleLock(LOCK, io, DEAD, THRESHOLDS, { confirmRunId: "run-A", yes: true });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("LOCK_LIVENESS_UNPROVEN");
+    expect(removes).toEqual([]);
+    expect(state[LOCK]).toBe(before);
+  });
+
+  test("AC11: a malformed lock refuses (LOCK_MALFORMED) and is never clobbered", () => {
+    const { io, state, removes } = makeIo({ [LOCK]: "{ not json" });
+    const before = state[LOCK];
+
+    const result = breakStaleLock(LOCK, io, DEAD, THRESHOLDS, { confirmRunId: "run-A", yes: true });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("LOCK_MALFORMED");
+    expect(removes).toEqual([]);
+    expect(state[LOCK]).toBe(before);
+  });
+
+  test("an absent lock refuses (LOCK_ABSENT) and removes nothing", () => {
+    const { io, removes } = makeIo();
+
+    const result = breakStaleLock(LOCK, io, DEAD, THRESHOLDS, { confirmRunId: "run-A", yes: true });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("LOCK_ABSENT");
+    expect(removes).toEqual([]);
+  });
+
+  test("AC12: the holder changing between verdict and clear aborts (re-read/CAS) and clears nothing", () => {
+    // A clock whose first liveness check is on the dead holder, but a concurrent
+    // run replaces the lock with a new holder before the clear. The re-read must
+    // detect the run_id change and abort — never removing the new holder's lock.
+    const deadHolder = serializeLock(record({ run_id: "run-DEAD" }));
+    const newHolder = serializeLock(record({ run_id: "run-NEW", session_id: "session-NEW" }));
+    const state: FsState = { [LOCK]: deadHolder };
+    const creates: string[] = [];
+    const removes: string[] = [];
+    let reads = 0;
+    const racingIo: LockIo = {
+      createExclusive: (file, contents) => {
+        if (Object.prototype.hasOwnProperty.call(state, file)) return { ok: false };
+        creates.push(file);
+        state[file] = contents;
+        return { ok: true };
+      },
+      readFileIfExists: (file) => {
+        reads += 1;
+        // First read (verdict) sees the dead holder; before the CAS re-read a
+        // concurrent run replaces the on-disk lock with a NEW holder. Model that
+        // by mutating state at the swap so the file genuinely holds the new owner.
+        if (reads >= 2 && file === LOCK) state[file] = newHolder;
+        if (!Object.prototype.hasOwnProperty.call(state, file)) return null;
+        return state[file] ?? null;
+      },
+      removeFile: (file) => {
+        removes.push(file);
+        delete state[file];
+      },
+    };
+
+    const result = breakStaleLock(LOCK, racingIo, DEAD, THRESHOLDS, {
+      confirmRunId: "run-DEAD",
+      yes: true,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("LOCK_CHANGED");
+    // The new holder's lock was never removed.
+    expect(removes).toEqual([]);
+    expect(state[LOCK]).toBe(newHolder);
+  });
+
+  test("AC12: the holder vanishing between verdict and clear aborts (LOCK_CHANGED), removes nothing", () => {
+    const deadHolder = serializeLock(record({ run_id: "run-DEAD" }));
+    const state: FsState = { [LOCK]: deadHolder };
+    const removes: string[] = [];
+    let reads = 0;
+    const racingIo: LockIo = {
+      createExclusive: () => ({ ok: false }),
+      readFileIfExists: (file) => {
+        reads += 1;
+        // The CAS re-read finds the lock gone (a concurrent release in the window).
+        if (reads >= 2 && file === LOCK) return null;
+        if (!Object.prototype.hasOwnProperty.call(state, file)) return null;
+        return state[file] ?? null;
+      },
+      removeFile: (file) => {
+        removes.push(file);
+        delete state[file];
+      },
+    };
+
+    const result = breakStaleLock(LOCK, racingIo, DEAD, THRESHOLDS, {
+      confirmRunId: "run-DEAD",
+      yes: true,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("LOCK_CHANGED");
+    expect(removes).toEqual([]);
   });
 });

@@ -5,9 +5,23 @@ import * as path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
 import type { CliIo } from "../cli/run.js";
-import type { LockIo, LockRecord } from "./lock.js";
+import type { LockClock, LockIo, LockRecord } from "./lock.js";
 import { LOCK_SCHEMA, serializeLock } from "./lock.js";
 import { defaultLockIo, runLock } from "./lock-cli.js";
+
+/**
+ * Deterministic clock for the `break` CLI gates: liveness, host, and time come
+ * from the seam, so the dead-PID-decisive behavior is exercised without relying
+ * on a real `process.kill` PID being alive/dead at test time.
+ */
+function memoryClock(over: Partial<LockClock> = {}): LockClock {
+  return {
+    now: () => Date.parse("2026-06-05T00:00:00.000Z"),
+    currentHost: "host-A",
+    isProcessAlive: () => true,
+    ...over,
+  };
+}
 
 function fakeIo(): { io: CliIo; out: string[]; err: string[] } {
   const out: string[] = [];
@@ -345,6 +359,225 @@ describe("runLock usage errors", () => {
     const { lockIo } = memoryLockIo();
     const { io } = fakeIo();
     expect(runLock(["status", EPIC, "--wat"], io, lockIo)).toBe(2);
+  });
+});
+
+describe("runLock break (T01 — human-gated, dead-PID-decisive)", () => {
+  // host-A holder; a dead pid on host-A is the only provable-death signal.
+  const DEAD = memoryClock({ isProcessAlive: () => false });
+  // The break-success path uses a holder whose host matches the clock.
+  const breakHolder = (over: Partial<LockRecord> = {}): LockRecord =>
+    holder({ host: "host-A", ...over });
+
+  test("break-preview: no confirmation flags reports what would break and does not mutate (dead-PID stale)", () => {
+    const existing = serializeLock(breakHolder());
+    const { lockIo, state, removes } = memoryLockIo({ [LOCK]: existing });
+    const { io, out } = fakeIo();
+
+    const code = runLock(["break", EPIC], io, lockIo, DEAD);
+
+    // Preview is informational, not a break: exit 0, nothing cleared.
+    expect(code).toBe(0);
+    expect(removes).toHaveLength(0);
+    expect(state[LOCK]).toBe(existing);
+    const parsed = JSON.parse(out.join("\n")) as {
+      ok: boolean;
+      broken: boolean;
+      preview: { holder: LockRecord; reasons: string[]; breakable: boolean };
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.broken).toBe(false);
+    expect(parsed.preview.holder.run_id).toBe("run-A");
+    expect(parsed.preview.reasons).toContain("dead_pid");
+    expect(parsed.preview.breakable).toBe(true);
+  });
+
+  test("break-success: a same-host dead pid with --confirm-run-id + --yes clears the lock and prints the audit", () => {
+    const existing = serializeLock(breakHolder({ run_id: "run-DEAD", pid: 9090 }));
+    const { lockIo, state, removes } = memoryLockIo({ [LOCK]: existing });
+    const { io, out } = fakeIo();
+
+    const code = runLock(["break", EPIC, "--confirm-run-id", "run-DEAD", "--yes"], io, lockIo, DEAD);
+
+    expect(code).toBe(0);
+    expect(removes).toEqual([LOCK]);
+    expect(state[LOCK]).toBeUndefined();
+    const parsed = JSON.parse(out.join("\n")) as {
+      ok: boolean;
+      broken: boolean;
+      audit: {
+        epic_path: string;
+        run_id: string;
+        pid: number;
+        host: string;
+        reasons: string[];
+        action: string;
+        timestamp: string;
+        result: string;
+      };
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.broken).toBe(true);
+    // AC14: minimum printed audit fields.
+    expect(parsed.audit.epic_path).toBe(EPIC);
+    expect(parsed.audit.run_id).toBe("run-DEAD");
+    expect(parsed.audit.pid).toBe(9090);
+    expect(parsed.audit.host).toBe("host-A");
+    expect(parsed.audit.reasons).toContain("dead_pid");
+    expect(parsed.audit.action).toBe("break");
+    expect(typeof parsed.audit.timestamp).toBe("string");
+    expect(parsed.audit.result).toBe("broken");
+  });
+
+  test("break-no-yes: --confirm-run-id without --yes is a preview — clears nothing (AC3)", () => {
+    const existing = serializeLock(breakHolder());
+    const { lockIo, state, removes } = memoryLockIo({ [LOCK]: existing });
+    const { io, out } = fakeIo();
+
+    // Without --yes there is no go-ahead: this is a non-mutating preview (exit 0),
+    // regardless of whether --confirm-run-id was supplied. AC3's requirement is
+    // that it must not mutate — proven by the intact lock and zero removes.
+    const code = runLock(["break", EPIC, "--confirm-run-id", "run-A"], io, lockIo, DEAD);
+
+    expect(code).toBe(0);
+    expect(removes).toHaveLength(0);
+    expect(state[LOCK]).toBe(existing);
+    const parsed = JSON.parse(out.join("\n")) as { ok: boolean; broken: boolean };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.broken).toBe(false);
+  });
+
+  test("break-no-confirm: --yes without --confirm-run-id refuses (LOCK_CONFIRM_MISMATCH, no mutation)", () => {
+    const existing = serializeLock(breakHolder());
+    const { lockIo, state, removes } = memoryLockIo({ [LOCK]: existing });
+    const { io, out } = fakeIo();
+
+    const code = runLock(["break", EPIC, "--yes"], io, lockIo, DEAD);
+
+    expect(code).not.toBe(0);
+    expect(removes).toHaveLength(0);
+    expect(state[LOCK]).toBe(existing);
+    expect(JSON.parse(out.join("\n")).code).toBe("LOCK_CONFIRM_MISMATCH");
+  });
+
+  test("break-wrong-confirm: a wrong --confirm-run-id refuses (LOCK_CONFIRM_MISMATCH) and leaves the lock intact", () => {
+    const existing = serializeLock(breakHolder({ run_id: "run-DEAD" }));
+    const { lockIo, state, removes } = memoryLockIo({ [LOCK]: existing });
+    const { io, out } = fakeIo();
+
+    const code = runLock(["break", EPIC, "--confirm-run-id", "run-WRONG", "--yes"], io, lockIo, DEAD);
+
+    expect(code).not.toBe(0);
+    expect(removes).toHaveLength(0);
+    expect(state[LOCK]).toBe(existing);
+    expect(JSON.parse(out.join("\n")).code).toBe("LOCK_CONFIRM_MISMATCH");
+  });
+
+  test("break-fresh: a fresh (live same-host) lock refuses (LOCK_NOT_STALE) even with confirmation; intact", () => {
+    const existing = serializeLock(breakHolder({ run_id: "run-LIVE" }));
+    const { lockIo, state, removes } = memoryLockIo({ [LOCK]: existing });
+    const { io, out } = fakeIo();
+
+    // ALIVE clock: process is alive on the same host.
+    const code = runLock(
+      ["break", EPIC, "--confirm-run-id", "run-LIVE", "--yes"],
+      io,
+      lockIo,
+      memoryClock(),
+    );
+
+    expect(code).not.toBe(0);
+    expect(removes).toHaveLength(0);
+    expect(state[LOCK]).toBe(existing);
+    expect(JSON.parse(out.join("\n")).code).toBe("LOCK_NOT_STALE");
+  });
+
+  test("break-ttl-only: an aged lock with a live pid refuses (LOCK_LIVENESS_UNPROVEN); intact ( thresholds never authorize a break)", () => {
+    const existing = serializeLock(
+      breakHolder({
+        run_id: "run-AGED",
+        acquired_ts: "2000-01-01T00:00:00.000Z",
+        heartbeat_ts: "2000-01-01T00:00:00.000Z",
+      }),
+    );
+    const { lockIo, state, removes } = memoryLockIo({ [LOCK]: existing });
+    const { io, out } = fakeIo();
+
+    // Tiny TTLs make it stale by heartbeat/acquire, but the pid is alive → no dead_pid.
+    const code = runLock(
+      [
+        "break",
+        EPIC,
+        "--confirm-run-id",
+        "run-AGED",
+        "--yes",
+        "--heartbeat-ttl-ms",
+        "1",
+        "--acquire-ttl-ms",
+        "1",
+      ],
+      io,
+      lockIo,
+      memoryClock(),
+    );
+
+    expect(code).not.toBe(0);
+    expect(removes).toHaveLength(0);
+    expect(state[LOCK]).toBe(existing);
+    expect(JSON.parse(out.join("\n")).code).toBe("LOCK_LIVENESS_UNPROVEN");
+  });
+
+  test("break-cross-host: a cross-host lock refuses; intact (cross-host pid liveness is unverifiable)", () => {
+    const existing = serializeLock(breakHolder({ run_id: "run-REMOTE", host: "host-OTHER" }));
+    const { lockIo, state, removes } = memoryLockIo({ [LOCK]: existing });
+    const { io } = fakeIo();
+
+    // Even a dead-pid clock cannot prove a cross-host death.
+    const code = runLock(
+      ["break", EPIC, "--confirm-run-id", "run-REMOTE", "--yes"],
+      io,
+      lockIo,
+      DEAD,
+    );
+
+    expect(code).not.toBe(0);
+    expect(removes).toHaveLength(0);
+    expect(state[LOCK]).toBe(existing);
+  });
+
+  test("break-malformed: a malformed lock refuses (LOCK_MALFORMED) and is never clobbered", () => {
+    const { lockIo, state, removes } = memoryLockIo({ [LOCK]: "{ not json" });
+    const { io, out } = fakeIo();
+
+    const code = runLock(["break", EPIC, "--confirm-run-id", "run-A", "--yes"], io, lockIo, DEAD);
+
+    expect(code).not.toBe(0);
+    expect(removes).toHaveLength(0);
+    expect(state[LOCK]).toBe("{ not json");
+    expect(JSON.parse(out.join("\n")).code).toBe("LOCK_MALFORMED");
+  });
+
+  test("break-absent: no lock refuses (LOCK_ABSENT) and removes nothing", () => {
+    const { lockIo, removes } = memoryLockIo();
+    const { io, out } = fakeIo();
+
+    const code = runLock(["break", EPIC, "--confirm-run-id", "run-A", "--yes"], io, lockIo, DEAD);
+
+    expect(code).not.toBe(0);
+    expect(removes).toHaveLength(0);
+    expect(JSON.parse(out.join("\n")).code).toBe("LOCK_ABSENT");
+  });
+
+  test("break requires <epic>", () => {
+    const { lockIo } = memoryLockIo();
+    const { io } = fakeIo();
+    expect(runLock(["break", "--confirm-run-id", "run-A"], io, lockIo, DEAD)).toBe(2);
+  });
+
+  test("break rejects an unknown flag", () => {
+    const { lockIo } = memoryLockIo();
+    const { io } = fakeIo();
+    expect(runLock(["break", EPIC, "--wat"], io, lockIo, DEAD)).toBe(2);
   });
 });
 
