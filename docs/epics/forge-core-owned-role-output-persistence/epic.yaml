@@ -1,0 +1,8 @@
+schema_version: 1
+id: forge-core-owned-role-output-persistence
+title: Core-owned role-output persistence (parse-agent --out), proof-gated
+sprints:
+  - sprint-01-core-owned-persistence
+gate_policy:
+  default_push: human
+  default_merge: human
