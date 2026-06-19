@@ -64,7 +64,7 @@ const USAGE =
   "       forge lock release <epic> --run-id <id>\n" +
   "       forge lock status <epic> [--heartbeat-ttl-ms <n>] [--acquire-ttl-ms <n>]\n" +
   "       forge repo snapshot --repo-root <path> [--base <sha>]\n" +
-  "       forge parse-agent <role> (--file <path> | --stdin | --json-file <path> | --json-stdin) [--expected-decision-id <D-NNN> (pm only)]\n" +
+  "       forge parse-agent <role> (--file <path> | --stdin | --json-file <path> | --json-stdin) [--out <path>] [--expected-decision-id <D-NNN> (pm only)]\n" +
   "       forge agent-schema <role>\n" +
   "       forge active-ticket <epic-path> [--json] [--repo-root <path>] [--out <path>]\n" +
   "       forge guard paths [--active <active-ticket.json>] [--json] [--repo-root <path>]\n" +
@@ -388,6 +388,42 @@ export function runCli(argv: string[], io: CliIo, options: RunCliOptions = {}): 
         return 1;
       }
     }
+
+    // Optional Core-owned persistence (`--out <path>`). Only reachable here after
+    // a SUCCESSFUL validation and the pm decision-id cross-check — every failure
+    // path above returns before this point, so nothing is ever written for an
+    // invalid output, an unknown role, or a decision-id mismatch. The persisted
+    // bytes are the *validated canonical object* (`result.data`, including schema
+    // defaults), never the raw input. Containment is checked before the write:
+    // `--out` must resolve strictly inside a `.forge/` directory segment, else a
+    // typed OUT_PATH_OUTSIDE_FORGE with no write. Core never repairs.
+    const out = flagValue(flags, "--out");
+    if (result.ok && out !== undefined) {
+      if (!isInsideForgeSegment(out)) {
+        io.print(
+          JSON.stringify(
+            {
+              ok: false,
+              code: "OUT_PATH_OUTSIDE_FORGE",
+              errors: [`--out must resolve to a path strictly inside a .forge/ directory; got ${out}`],
+            },
+            null,
+            2,
+          ),
+        );
+        return 1;
+      }
+      const canonicalJson = JSON.stringify(result.data, null, 2);
+      try {
+        fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
+        fs.writeFileSync(out, canonicalJson, "utf8");
+      } catch (thrown) {
+        const message = thrown instanceof Error ? thrown.message : String(thrown);
+        io.printError(`failed to write role output to ${out}: ${message}`);
+        return 1;
+      }
+    }
+
     io.print(JSON.stringify(result, null, 2));
     return result.ok ? 0 : 1;
   }
@@ -417,7 +453,14 @@ const DISPATCH_FLAGS = new Set([
   "--json",
   "--repo-root",
 ]);
-const PARSE_AGENT_FLAGS = new Set(["--file", "--stdin", "--json-file", "--json-stdin", "--expected-decision-id"]);
+const PARSE_AGENT_FLAGS = new Set([
+  "--file",
+  "--stdin",
+  "--json-file",
+  "--json-stdin",
+  "--expected-decision-id",
+  "--out",
+]);
 const INPUT_MODES = ["--file", "--stdin", "--json-file", "--json-stdin"] as const;
 const ASSIGNED_DECISION_ID_PATTERN = /^D-\d+$/;
 
@@ -431,6 +474,25 @@ function flagValue(args: string[], flag: string): string | undefined {
 /** Locate the per-epic decisions ledger from a dispatch epic path. */
 function ledgerPathFor(epic: string): string {
   return `${epic.replace(/[\\/]+$/, "")}/.forge/decisions-ledger.json`;
+}
+
+/**
+ * Containment check for `parse-agent --out`: the path must resolve strictly
+ * inside a `.forge/` directory segment. Unlike `run-report write` (which knows
+ * the epic root and checks a single concrete `.forge` dir), `parse-agent` takes
+ * no epic argument, so the boundary is "any `.forge` ancestor directory".
+ *
+ * Uses resolved-path containment, not a string-prefix check: a crafted
+ * `…/.forge/../../outside.json` resolves to a directory whose path no longer
+ * contains a `.forge` segment, so it is refused. The `.forge` segment must be an
+ * *ancestor directory* of the target file — the resolved path's own basename
+ * being `.forge` (writing the directory itself) does not satisfy containment.
+ */
+function isInsideForgeSegment(outPath: string): boolean {
+  const resolvedDir = path.dirname(path.resolve(outPath));
+  // path.sep splits the resolved ancestor chain into directory segments; the
+  // target is contained iff one of those ancestor directories is literally `.forge`.
+  return resolvedDir.split(path.sep).includes(".forge");
 }
 
 function runImport(args: string[], io: CliIo): number {

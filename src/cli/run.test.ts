@@ -1434,6 +1434,171 @@ describe("runCli parse-agent — structured (JSON) modes", () => {
   });
 });
 
+describe("runCli parse-agent --out — Core-owned role-output persistence", () => {
+  const engineerObj = {
+    ticket: "T01",
+    summary: "x",
+    files_changed: [{ path: "src/x.ts", adds: 1, dels: 0 }],
+    tests: { added: 1, changed: 0 },
+    commands_run: [{ cmd: "pnpm test", result: "pass" }],
+    within_allowed_paths: true,
+  };
+  const semanticObj = {
+    verdict: "APPROVE",
+    acceptance_checked: [{ id: 1, status: "met", evidence: "tests pass" }],
+    findings: [],
+    risk_level: "low",
+  };
+  const scopeObj = {
+    verdict: "APPROVE",
+    allowed_path_status: "clean",
+    recommendation: "ship it",
+  };
+  const pmObj = {
+    decision: "PASS",
+    rationale: "ok",
+    decision_id: "D-001",
+    journal_entry: "x",
+    human_gate_required: true,
+  };
+
+  /** A scratch `.forge` directory plus an `out.json` target path strictly inside it. */
+  function forgeOut(): { dir: string; out: string } {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-pa-out-"));
+    cliTempDirs.push(dir);
+    const forgeDir = path.join(dir, ".forge");
+    return { dir: forgeDir, out: path.join(forgeDir, "out.json") };
+  }
+
+  function writeJson(value: unknown): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-pa-out-in-"));
+    cliTempDirs.push(dir);
+    const file = path.join(dir, "in.json");
+    fs.writeFileSync(file, typeof value === "string" ? value : JSON.stringify(value));
+    return file;
+  }
+
+  test("engineer --json-file --out writes the canonical validated engineer object", () => {
+    const file = writeJson(engineerObj);
+    const { out: outPath } = forgeOut();
+    const { io } = fakeIo();
+    const code = runCli(["parse-agent", "engineer", "--json-file", file, "--out", outPath], io);
+    expect(code).toBe(0);
+    expect(fs.existsSync(outPath)).toBe(true);
+    const written = JSON.parse(fs.readFileSync(outPath, "utf8"));
+    // Canonical object includes schema defaults (risks/deviations), not the raw input.
+    expect(written).toMatchObject(engineerObj);
+    expect(written.risks).toEqual([]);
+    expect(written.deviations).toEqual([]);
+  });
+
+  test("semantic-verifier --json-file --out writes the canonical validated object", () => {
+    const file = writeJson(semanticObj);
+    const { out: outPath } = forgeOut();
+    const { io } = fakeIo();
+    const code = runCli(["parse-agent", "semantic-verifier", "--json-file", file, "--out", outPath], io);
+    expect(code).toBe(0);
+    const written = JSON.parse(fs.readFileSync(outPath, "utf8"));
+    expect(written).toMatchObject(semanticObj);
+    expect(written.missing_proof).toEqual([]);
+  });
+
+  test("scope-verifier --json-file --out writes the canonical validated object", () => {
+    const file = writeJson(scopeObj);
+    const { out: outPath } = forgeOut();
+    const { io } = fakeIo();
+    const code = runCli(["parse-agent", "scope-verifier", "--json-file", file, "--out", outPath], io);
+    expect(code).toBe(0);
+    const written = JSON.parse(fs.readFileSync(outPath, "utf8"));
+    expect(written).toMatchObject(scopeObj);
+    expect(written.changed_files).toEqual([]);
+    expect(written.forbidden_path_violations).toEqual([]);
+  });
+
+  test("pm --json-file --out --expected-decision-id D-001 writes the canonical PM object", () => {
+    const file = writeJson(pmObj);
+    const { out: outPath } = forgeOut();
+    const { io } = fakeIo();
+    const code = runCli(
+      ["parse-agent", "pm", "--json-file", file, "--out", outPath, "--expected-decision-id", "D-001"],
+      io,
+    );
+    expect(code).toBe(0);
+    const written = JSON.parse(fs.readFileSync(outPath, "utf8"));
+    expect(written).toMatchObject(pmObj);
+    expect(written.instructions).toEqual([]);
+  });
+
+  test("invalid output writes no file and exits non-zero", () => {
+    const file = writeJson({ summary: "missing fields" });
+    const { out: outPath } = forgeOut();
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "engineer", "--json-file", file, "--out", outPath], io);
+    expect(code).toBe(1);
+    expect(fs.existsSync(outPath)).toBe(false);
+    expect(JSON.parse(out.join("\n")).code).toBe("AGENT_OUTPUT_INVALID");
+  });
+
+  test("malformed JSON writes no file and exits non-zero (AGENT_OUTPUT_INVALID)", () => {
+    const file = writeJson("{ not json");
+    const { out: outPath } = forgeOut();
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "engineer", "--json-file", file, "--out", outPath], io);
+    expect(code).toBe(1);
+    expect(fs.existsSync(outPath)).toBe(false);
+    expect(JSON.parse(out.join("\n")).code).toBe("AGENT_OUTPUT_INVALID");
+  });
+
+  test("pm decision_id mismatch writes no file and exits non-zero", () => {
+    const file = writeJson(pmObj); // decision_id D-001
+    const { out: outPath } = forgeOut();
+    const { io, out } = fakeIo();
+    const code = runCli(
+      ["parse-agent", "pm", "--json-file", file, "--out", outPath, "--expected-decision-id", "D-002"],
+      io,
+    );
+    expect(code).toBe(1);
+    expect(fs.existsSync(outPath)).toBe(false);
+    expect(JSON.parse(out.join("\n")).code).toBe("DECISION_ID_MISMATCH");
+  });
+
+  test("--out outside a .forge/ directory fails with OUT_PATH_OUTSIDE_FORGE and writes no file", () => {
+    const file = writeJson(engineerObj);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-pa-out-bad-"));
+    cliTempDirs.push(dir);
+    const outPath = path.join(dir, "out.json"); // no .forge segment
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "engineer", "--json-file", file, "--out", outPath], io);
+    expect(code).toBe(1);
+    expect(fs.existsSync(outPath)).toBe(false);
+    expect(JSON.parse(out.join("\n")).code).toBe("OUT_PATH_OUTSIDE_FORGE");
+  });
+
+  test("--out that escapes .forge/ via traversal fails closed (OUT_PATH_OUTSIDE_FORGE)", () => {
+    const file = writeJson(engineerObj);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "forge-pa-out-trav-"));
+    cliTempDirs.push(root);
+    fs.mkdirSync(path.join(root, ".forge"), { recursive: true });
+    // Resolves to <root>/outside.json — outside .forge despite the literal segment.
+    const outPath = path.join(root, ".forge", "..", "outside.json");
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "engineer", "--json-file", file, "--out", outPath], io);
+    expect(code).toBe(1);
+    expect(fs.existsSync(path.join(root, "outside.json"))).toBe(false);
+    expect(JSON.parse(out.join("\n")).code).toBe("OUT_PATH_OUTSIDE_FORGE");
+  });
+
+  test("legacy parse-agent without --out is unchanged (validates, echoes, writes nothing)", () => {
+    const file = writeJson(engineerObj);
+    const { io, out } = fakeIo();
+    const code = runCli(["parse-agent", "engineer", "--json-file", file], io);
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out.join("\n"));
+    expect(parsed.ok).toBe(true);
+    expect(parsed.data).toMatchObject(engineerObj);
+  });
+});
+
 describe("runCli agent-schema (JSON Schema emitter)", () => {
   for (const role of ["engineer", "semantic-verifier", "scope-verifier", "pm"] as const) {
     test(`emits a JSON Schema for ${role} with additionalProperties:false and required`, () => {
