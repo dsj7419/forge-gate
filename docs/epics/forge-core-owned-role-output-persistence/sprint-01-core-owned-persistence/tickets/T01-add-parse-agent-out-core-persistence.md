@@ -6,7 +6,7 @@ kind: green
 risk: medium
 change_class: feature
 blast_radius: module
-status: pending
+status: merged
 depends_on: []
 blocks:
   - T02

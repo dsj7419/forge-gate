@@ -7,7 +7,7 @@ gate_policy:
 tickets:
   - id: T01
     kind: green
-    status: pending
+    status: merged
     blocks:
       - T02
   - id: T02
