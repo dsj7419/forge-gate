@@ -325,17 +325,42 @@ async function roleSchema(role) {
 }
 
 /**
- * Persist a structured role output to `.forge/<file>.json`, then validate it
- * through Core (`forge parse-agent <role> --json-file`). Returns the Core parse
- * result `{exit, json}` — the script trusts ONLY Core's verdict, never the
- * agent's self-report. `pm` adds the ledger-derived expected-decision-id check.
+ * Persist a structured role output to `.forge/<file>.json` through Core's
+ * validate-then-write surface (`forge parse-agent <role> --json-stdin --out
+ * <path>`). This is the T01 Core-owned persistence: Core validates the candidate
+ * object AND writes the canonical bytes via its own `fs` in ONE command, so the
+ * core-runner's only persistence action for a role output is a Bash `forge`
+ * command — NO generic sub-agent ever issues a Write-tool action that stamps a
+ * verdict. The candidate object transits stdin (a heredoc), never a temp file:
+ * a temp-file input mode would reintroduce the denied verdict-Write shape
+ * (PM-ratified: `--json-stdin` is the required transport, no temp-file fallback).
+ *
+ * Returns the Core parse result `{exit, json}` — the script trusts ONLY Core's
+ * verdict, never the agent's self-report. The destination path is unchanged
+ * (`.forge/<file>.json`), so PM dispatch and run-report consume it untouched.
+ * `pm` adds the ledger-derived expected-decision-id cross-check. The workflow
+ * still never writes a file itself; `writeForgeFile` is no longer used for the
+ * four role outputs.
  */
 async function persistAndValidateRole(role, fileName, roleObject, expectedDecisionId) {
-  const path = await writeForgeFile(fileName, roleObject);
+  const target = `${forgeDir}/${fileName}`;
+  // Serialize the validated candidate (the typed agent({schema}) return) here; the
+  // core-runner only pipes these exact bytes into Core over stdin — it never writes
+  // a file. Core re-validates and, on success, writes the canonical object to --out.
+  const json = JSON.stringify(roleObject, null, 2);
   const idFlag =
     role === "pm" && expectedDecisionId !== undefined ? ` --expected-decision-id ${expectedDecisionId}` : "";
-  // parse-agent takes the file path positionally/by-flag; it REJECTS --repo-root.
-  return await runCoreJsonResult(`${forgeBin} parse-agent ${role} --json-file "${path}"${idFlag}`);
+  // parse-agent takes the role positionally; --json-stdin reads the candidate from
+  // stdin; --out is the Core-owned write target (contained to `.forge/`). It REJECTS
+  // --repo-root. Stdin transport uses a quoted-delimiter heredoc so the JSON bytes
+  // (which may contain $, backticks, quotes) are passed literally with no shell
+  // expansion; no role-output JSON line ever equals the FORGE_ROLE_STDIN_EOF marker.
+  const command = [
+    `${forgeBin} parse-agent ${role} --json-stdin --out "${target}"${idFlag} <<'FORGE_ROLE_STDIN_EOF'`,
+    json,
+    "FORGE_ROLE_STDIN_EOF",
+  ].join("\n");
+  return await runCoreJsonResult(command);
 }
 
 /** Derive the next decision id from the ledger (max D-(n)+1; empty -> D-001). */
