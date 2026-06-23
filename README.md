@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/dsj7419/forge-gate/actions/workflows/ci.yml/badge.svg)](https://github.com/dsj7419/forge-gate/actions/workflows/ci.yml)
 ![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen)
-![Tests](https://img.shields.io/badge/tests-624%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-784%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Status](https://img.shields.io/badge/status-MVP%20%C2%B7%20human--gated-orange)
 
@@ -109,7 +109,7 @@ ForgeGate self-runs; for any other project they differ, which is what makes Forg
 
 ## What's shipped
 
-Everything below exists today, is unit-tested (**624 tests / 40 files, green in CI**), and has been exercised
+Everything below exists today, is unit-tested (**784 tests / 45 files, green in CI**), and has been exercised
 through the governed loop.
 
 ### Governance engine (Forge Core)
@@ -118,10 +118,11 @@ through the governed loop.
 - **`run --dry-run`** — selects the next ready ticket and reports gate, branch, dependency reasoning, and escalation state. Read-only.
 - **`active-ticket`** — emits the Core-owned `forge-active-ticket/v1` fence (absolute repo_root, paths, branch) that the guard and run-report consume.
 - **`packets` / `dispatch`** — deterministic per-role dispatch context and specs for engineer, semantic verifier, scope verifier, and PM. Registered subagent type when available; verbatim injected-charter fallback otherwise — never an improvised prompt.
-- **`parse-agent`** — validates structured agent output (YAML *or* JSON) against the role schema. Malformed output is rejected, never repaired.
+- **`parse-agent`** — validates structured agent output (YAML *or* JSON) against the role schema. Malformed output is rejected, never repaired. With `--out`, Core also *writes* the validated canonical artifact to `.forge/` itself (validate-then-write, with `.forge/`-segment containment) — so persistence of a role output is a Core `fs` write, never a generic agent stamping a verdict.
 - **Core-pinned `decision_id`** — assigned monotonically from a per-epic ledger; the PM echoes it verbatim and Core cross-checks. Duplication and renumbering are structurally impossible.
 - **`run-report write`** — Core-owned `forge-run-report/v1`. Safety fields (`committed`, `pushed`, `pr_opened`, `merged`, `status_write_back`, `journal_written`) are typed `z.literal(false)` — the v1 thesis lives in the type system, so it can't be flipped without a v2 bump.
 - **`importer`** — normalizes a legacy sprint folder into the canonical contract; writes `TODO` placeholders rather than inventing ambiguous fields (a human-completion draft).
+- **`repo snapshot`** — hook-free, read-only repo facts (head, branch, clean state, changed files, ahead-of-base) computed via internal git, so the workflow runner reads repo state without shelling git through the permissions hook.
 
 ### Agent workflow
 - **One governed self-run** — engineer → independent verify → scope guard → semantic verifier → scope verifier → PM, stopping at the commit gate.
@@ -141,8 +142,15 @@ through the governed loop.
 ### Cross-run concurrency (epic locking)
 - **Core epic-lock primitive** — atomic exclusive-create (`O_EXCL` / `wx`): the create *is* the mutual exclusion, so there is no check-then-act TOCTOU. Typed `forge-lock/v1` record keyed by `run_id`.
 - **`forge lock acquire | release | status`** — real `defaultLockIo` filesystem binding; owner-checked release; report-only stale verdict (never clears or steals); malformed locks fail closed.
+- **`forge lock break`** — human-gated stale-lock recovery, **same-host provably-dead PID only** (`--confirm-run-id` echo + `--yes`; CAS re-read before clear). A fresh/live lock can never be broken (`LOCK_NOT_STALE`); a TTL-only / heartbeat-only / cross-host lock is refused (`LOCK_LIVENESS_UNPROVEN`). Heartbeat/TTL/cross-host recovery remain future work.
 - **Both orchestrators are wired to it** — the command runner (`/forge-run-ticket`) and the workflow-backed runner both acquire before any mutation, hold across correction cycles, and release owner-checked on PASS / terminal outcomes.
 - **Atomic / CAS decisions-ledger append** — defense-in-depth: ledger appends can't duplicate or clobber decisions under concurrent interleavings, even if the lock is bypassed.
+
+### Workflow-backed runner & scratch isolation
+- **Two orchestrators, one lock.** Alongside the Markdown `/forge-run-ticket` command there is a **workflow-backed runner** (`workflows/forge-run-ticket.workflow.js`), live-proven end-to-end through its own harness with real agents and a real lock. Both runners are serialized by the same epic lock.
+- **OS-temp scratch launch.** Workflows are launched from a Forge-owned OS-temp scratch cwd via `scripts/launch-workflow.mjs`; a fail-closed launch-cwd gate (`PREFLIGHT_LAUNCH_CWD_UNSAFE`, before any mutation) makes a repo-launched workflow run impossible by design, so the harness's scratch capture can never land inside a repo.
+- **Crash-path owner-release.** An unhandled workflow failure releases the lock owner-checked and returns a typed `UNHANDLED_WORKFLOW_FAILURE` (`outward_action_taken: false`, `human_gate_required: true`) — never an orphaned lock.
+- **Core-owned role-output persistence.** The runner persists each role output through `forge parse-agent <role> --json-stdin --out` (Core validates, then writes), so no generic agent ever issues a verdict-stamping write. An in-context proof in the hook-less launcher substrate (3 independent runs, 0 classifier denials) confirmed the migrated path persists every role output — including the previously-blocked verifier verdict — cleanly.
 
 ### Human-gated delivery
 - **Stops at the commit gate.** On PASS it prints the handoff (changed files, verification summary, PM decision, a *proposed* status transition, a suggested commit message and `git add`/`git commit`) and stops. It never commits.
@@ -304,12 +312,14 @@ other's evidence. ForgeGate closes this with a Core-owned **epic lock**:
 - **The CAS ledger append is defense-in-depth** — even if the lock were bypassed, a decision can't be
   duplicated or clobbered. With both runners holding the lock, this backstop sits behind real primary
   serialization.
-- **Stale recovery is deliberately not automated.** `forge lock status` *reports* a stale/foreign/malformed
-  verdict; nothing clears, breaks, or steals a lock. A human-gated recovery path is future work.
+- **Stale recovery is human-gated.** `forge lock status` *reports* a stale/foreign/malformed verdict but never
+  clears, breaks, or steals. `forge lock break` adds a deliberate, human-gated recovery path for a **same-host,
+  provably-dead PID holder only** (`--confirm-run-id` echo + `--yes`, CAS re-read before clear); a live lock can
+  never be broken. Heartbeat/TTL/cross-host recovery remains future work.
 
-> **Honest status:** the workflow runner's lock wiring is **wired and lock-tested**, and the command runner has
-> exercised real acquire/release **live**. The workflow runner's first full **end-to-end live** proof (real
-> lock through its own harness with real agents) is still pending — see the roadmap.
+> **Honest status:** both runners are wired to the lock and **live-proven** — the command runner and the
+> workflow-backed runner have each exercised real acquire/release end-to-end through their own harness with real
+> agents. The remaining concurrency work (evidence-ownership / `run_id`, worktree / shared-state) is on the roadmap.
 
 ---
 
@@ -438,15 +448,14 @@ injected verbatim (`mode: injected-charter`) — never an improvised prompt. Eit
 
 Sequenced roughly by priority. Nothing here is committed; it's the honest "what's next."
 
-### Near-term — close the concurrency story
-- **First live workflow-runner proof** — exercise the workflow runner end-to-end through its harness with real agents and a real lock (wiring is in place and lock-tested; live proof pending).
-- **Stale-lock recovery UX** — `forge lock status` already diagnoses stale/foreign/malformed; add a human-gated, owner-aware recovery path with strong safety controls (no silent break/steal).
+### Near-term — finish the concurrency story
+- **Stale-lock recovery beyond v1** — `forge lock break` already recovers a same-host, provably-dead PID holder; a **heartbeat updater** (to make `heartbeat_ts` live), then TTL-only and cross-host recovery, are the remaining steps.
 - **Evidence ownership / `run_id` enforcement** — tie active-ticket, run-report, orchestrator-facts, and captured evidence to the owning run.
 - **Worktree / shared-state architecture** — prevent per-worktree `.forge` state from fragmenting shared lock/ledger provenance.
 
 ### Delivery & automation
 - **Sentinel-gated `gh pr merge`** — an approval-file-gated merge path in its own ticket (deferred follow-up).
-- **Command/workflow parity review** and a better launcher for workflow runs (run identity, pre-branch serialization).
+- **Command/workflow parity review** — keep the two runners behaviourally aligned as each evolves.
 
 ### Adoption & operations
 - **External-repo pilot sequence** once concurrency is fully closed.
