@@ -6,7 +6,7 @@ kind: green
 risk: medium
 change_class: refactor
 blast_radius: module
-status: pending
+status: merged
 depends_on:
   - T01
 blocks: []
