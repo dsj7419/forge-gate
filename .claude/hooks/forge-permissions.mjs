@@ -551,15 +551,38 @@ function classifyGit(tokens, readOnlyOnly) {
   // pathspecs, so a clean branch name is unambiguous and safe. ---
   if (sub === "switch") {
     const positionals = [];
+    let createFlags = 0; // count of `-c` (safe-create) flags seen
     for (const a of args) {
       // De-quote/de-obfuscate the token FIRST so a quoted flag (`"-c"`) or quoted
       // detach target (`"HEAD"`) cannot slip the flag / shape checks.
       const clean = deQuoteToken(a);
-      if (clean.startsWith("-")) return { ok: false }; // any flag on switch -> DENY
+      if (clean.startsWith("-")) {
+        // T01 — the ONLY permitted switch flag is `-c` (safe feature-branch
+        // CREATE). Branch creation is local + reversible, so `git switch -c
+        // <safe-feature-branch>` is an ALLOW iff the target clears the SAME
+        // `isSafeFeatureBranch` shape filter the push allowlist uses. `-C`
+        // (force-create / reset), `--create` (long form), `--force`,
+        // `--detach`, `--discard-changes`, and any other flag stay DENY.
+        if (clean === "-c") {
+          createFlags++;
+          continue;
+        }
+        return { ok: false }; // any other flag on switch -> DENY
+      }
       positionals.push(clean);
     }
     if (positionals.length !== 1) return { ok: false };
     const target = positionals[0];
+
+    // --- T01 safe-create shape: exactly one `-c` flag + exactly one positional
+    // (no start-point — already enforced by the single-positional check above)
+    // and no other flag. The target must pass `isSafeFeatureBranch` (rejects
+    // `main`/`master`/`HEAD` as well as every unsafe shape). More than one `-c`,
+    // or `-c` alongside any other flag, falls through to DENY. ---
+    if (createFlags > 0) {
+      if (createFlags !== 1) return { ok: false }; // `-c -c …` is not the allowed shape
+      return isSafeFeatureBranch(target) ? { class: 1, ok: true } : { ok: false };
+    }
     // FIX 3 — `git switch HEAD`/`@`/`@{-1}`/`@{u}` detaches HEAD or resolves a
     // revision, NOT a branch checkout. Deny HEAD (any case), `@`, and any `@{...}`
     // reflog/upstream selector. The shape filter below already rejects `~`/`^`/`:`/
