@@ -21,3 +21,7 @@ coverage/
 pilot-local/
 sandbox-local/
 *.private.md
+
+# Repomix — local handoff artifacts (config + exports). Never tracked.
+*repomix*
+*RepoMix*
