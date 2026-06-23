@@ -67,7 +67,10 @@ expect("fix1-checkout-bare", bash("git checkout"), "deny");
 expect("fix2-switch-dotdot-etc", bash("git switch ../etc"), "deny");
 expect("fix2-switch-dotdot", bash("git switch .."), "deny");
 expect("fix2-switch-dot", bash("git switch ."), "deny");
-expect("fix2-switch-c", bash("git switch -c x"), "deny");
+// T01: `git switch -c <safe-feature-branch>` is now an ALLOW (see the T01 block
+// below). The bare `git switch -c x` here was previously a DENY case; the unsafe
+// switch-flag DENY intent is now covered by `--discard-changes` (next line) and
+// the T01 deny cases (`-C`, extra flags, start-point, unsafe shapes).
 expect("fix2-switch-discard", bash("git switch --discard-changes"), "deny");
 expect("fix2-switch-traversal-mid", bash("git switch a/../b"), "deny");
 expect("fix2-switch-refs", bash("git switch refs/heads/x"), "deny");
@@ -131,10 +134,16 @@ expect("c4-pull-bare", bash("git pull"), "deny");
 expect("c4-pull-rebase", bash("git pull --rebase"), "deny");
 expect("c4-gh-pr-merge", bash("gh pr merge 26"), "deny");
 expect("c4-gh-api-delete", bash("gh api -X DELETE repos/o/r/issues/1"), "deny");
-expect("c4-switch-c", bash("git switch -c x"), "deny");
+// T01: `git switch -c <safe-feature-branch>` is now an ALLOW. The remaining
+// Class-4 `-c` deny intent (protected target) is asserted here and exhaustively
+// in the T01 block below (`-C`, extra flag, start-point, unsafe shapes, runner).
+expect("c4-switch-c-main", bash("git switch -c main"), "deny");
 expect("c4-checkout-b", bash("git checkout -b x"), "deny");
 expect("c4-fetch-force", bash("git fetch --force"), "deny");
 // Extra Class-4 / challenge-flag coverage.
+// NOTE: `git switch -c <safe-feature-branch>` moved from DENY to ALLOW in T01;
+// its coverage now lives in the T01 block below. The unsafe `-c` forms (`-c main`,
+// `-c` + extra flag, `-c` + start-point, unsafe shapes, runner) stay DENY there.
 expect("c4-push-bare", bash("git push"), "deny");
 expect("c4-push-force-with-lease", bash("git push --force-with-lease origin feature/x"), "deny");
 expect("c4-commit", bash("git commit -m wip"), "deny");
@@ -201,9 +210,76 @@ expect("sw-at-dash1", bash("git switch @{-1}"), "deny");
 expect("sw-at", bash("git switch @"), "deny");
 expect("sw-at-upstream", bash("git switch @{u}"), "deny");
 expect("sw-quoted-head", bash('git switch "HEAD"'), "deny");
-expect("sw-quoted-c", bash('git switch "-c" x'), "deny");
+// T01: a quoted `"-c"` de-quotes to the now-permitted create flag, so
+// `git switch "-c" x` is ALLOW (covered as `t01-switch-c-quoted-c-flag` below).
+// The de-quote-then-reject intent for switch is preserved by `sw-quoted-head`
+// above and `t01-switch-c-quoted-main` (quoted protected target -> DENY) below.
 expect("sw-main-allow", bash("git switch main"), "allow");
 expect("sw-feature-allow", bash("git switch feature/x"), "allow");
+
+// === T01 — safe feature-branch CREATION via `git switch -c <branch>` ==========
+// Tier-1 re-calibration: branch creation is local + reversible, so ALLOW
+// `git switch -c <safe-feature-branch>` for a non-runner — iff the de-quoted
+// branch passes the SAME `isSafeFeatureBranch` shape filter the push allowlist
+// uses. `-C`, any extra flag, any start-point, protected/default targets, unsafe
+// shapes, and any runner (`forge-*`) all stay DENY. Strictly additive: only the
+// new `-c <branch>` allow-shape; the deny engine + every other case unchanged.
+
+// AC1 — ALLOW safe feature-branch creation (non-runner).
+expect("t01-switch-c-forge", bash("git switch -c forge/x/y-z"), "allow");
+expect("t01-switch-c-feature", bash("git switch -c feature/abc"), "allow");
+expect("t01-switch-c-fix", bash("git switch -c fix/123"), "allow");
+expect("t01-switch-c-create-long", bash("git switch --create feature/abc"), "deny"); // only `-c` is the allowed flag spelling; `--create` is an extra/unknown flag -> DENY
+expect("t01-switch-c-deep", bash("git switch -c feat/sub/deep-name"), "allow");
+
+// AC2 — DENY protected / default targets (main/master/HEAD, any case).
+expect("t01-switch-c-main", bash("git switch -c main"), "deny");
+expect("t01-switch-c-master", bash("git switch -c master"), "deny");
+expect("t01-switch-c-head", bash("git switch -c HEAD"), "deny");
+expect("t01-switch-c-main-upper", bash("git switch -c MAIN"), "deny");
+
+// AC3 — DENY `-C` (force-create / reset is NOT the allowed shape).
+expect("t01-switch-cap-c", bash("git switch -C x"), "deny");
+expect("t01-switch-cap-c-feature", bash("git switch -C feature/x"), "deny");
+
+// AC4 — DENY any additional flag, or any additional positional (start-point).
+expect("t01-switch-c-force", bash("git switch -c feature/x --force"), "deny");
+expect("t01-switch-c-detach", bash("git switch -c feature/x --detach"), "deny");
+expect("t01-switch-c-discard", bash("git switch -c feature/x --discard-changes"), "deny");
+expect("t01-switch-c-startpoint", bash("git switch -c feature/x origin/main"), "deny");
+expect("t01-switch-c-startpoint-sha", bash("git switch -c feature/x abc1234"), "deny");
+expect("t01-switch-c-flag-after", bash("git switch -c feature/x -t"), "deny");
+expect("t01-switch-c-double-c", bash("git switch -c -c feature/x"), "deny"); // two `-c` flags, branch arg absent in the slot -> DENY
+expect("t01-switch-c-no-branch", bash("git switch -c"), "deny"); // `-c` with no positional -> DENY
+
+// AC5 — DENY quoted / obfuscated bypasses via the existing de-quote path.
+expect("t01-switch-c-quoted-main", bash('git switch -c "main"'), "deny");
+expect("t01-switch-c-single-main", bash("git switch -c 'main'"), "deny");
+expect("t01-switch-c-backslash-main", bash("git switch -c ma\\in"), "deny");
+expect("t01-switch-c-quoted-head", bash('git switch -c "HEAD"'), "deny");
+expect("t01-switch-c-quoted-c-flag", bash('git switch "-c" feature/x'), "allow"); // quoted `-c` de-quotes to the flag; safe branch -> ALLOW (de-quote normalizes, shape unchanged)
+expect("t01-switch-c-quoted-master", bash('git switch -c "master"'), "deny");
+
+// AC2/shape — DENY unsafe branch shapes on `-c` (reuse `isSafeFeatureBranch`).
+expect("t01-switch-c-refs", bash("git switch -c refs/heads/x"), "deny");
+expect("t01-switch-c-colon", bash("git switch -c x:y"), "deny");
+expect("t01-switch-c-dotdot", bash("git switch -c a/../b"), "deny");
+expect("t01-switch-c-tilde", bash("git switch -c feature~1"), "deny");
+expect("t01-switch-c-glob", bash("git switch -c feat/*"), "deny");
+expect("t01-switch-c-leading-dash", bash("git switch -c -weird"), "deny");
+expect("t01-switch-c-empty-seg", bash("git switch -c feature//x"), "deny");
+
+// AC7 — a RUNNER (`forge-*`) gets NO branch creation (L3 unchanged).
+expect("t01-runner-switch-c-deny", bash("git switch -c feature/x", "forge-core-runner"), "deny");
+expect("t01-runner-switch-c-engineer-deny", bash("git switch -c feature/x", "forge-engineer"), "deny");
+
+// AC8 — complex/dynamic/obfuscated `switch -c` forms still hit the DENY engine.
+expect("t01-switch-c-chain", bash("git switch -c feature/x && git push --force origin main"), "deny");
+expect("t01-switch-c-subst", bash('git switch -c "$(echo main)"'), "deny");
+expect("t01-switch-c-group", bash("( git switch -c feature/x )"), "deny");
+
+// AC6 — `git switch <existing-branch>` keeps its Class-1 ALLOW (no regression).
+expect("t01-switch-existing-still-allow", bash("git switch develop"), "allow");
 
 // === gh quoted ARG values still ALLOW (quote rule is pathspec/branch only) ====
 expect("gh-quoted-create", bash('gh pr create --title "my title" --body "fixes bug"'), "allow");
