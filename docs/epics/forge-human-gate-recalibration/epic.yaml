@@ -1,0 +1,8 @@
+schema_version: 1
+id: forge-human-gate-recalibration
+title: Human-gate re-calibration — automate safe mechanics, keep judgment gates
+sprints:
+  - sprint-01-tier1-branch-create
+gate_policy:
+  default_push: human
+  default_merge: human

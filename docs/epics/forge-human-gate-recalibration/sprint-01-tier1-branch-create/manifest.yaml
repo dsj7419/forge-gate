@@ -1,0 +1,12 @@
+schema_version: 1
+sprint: sprint-01-tier1-branch-create
+integration_base: main
+gate_policy:
+  default_push: human
+  default_merge: human
+tickets:
+  - id: T01
+    kind: green
+    status: pending
+    depends_on: []
+    blocks: []
