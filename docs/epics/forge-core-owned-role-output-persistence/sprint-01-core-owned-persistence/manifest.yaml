@@ -12,6 +12,6 @@ tickets:
       - T02
   - id: T02
     kind: green
-    status: pending
+    status: merged
     depends_on:
       - T01
