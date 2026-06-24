@@ -6,7 +6,7 @@ kind: green
 risk: high
 change_class: feature
 blast_radius: app
-status: pending
+status: merged
 depends_on: []
 blocks: []
 allowed_paths:
