@@ -7,6 +7,6 @@ gate_policy:
 tickets:
   - id: T01
     kind: green
-    status: pending
+    status: merged
     depends_on: []
     blocks: []
